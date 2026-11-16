@@ -207,7 +207,7 @@ services:
       retries: 30
 
   redis:
-    image: redis:7.4.11-alpine3.21
+    image: redis:7.4.12-alpine3.21
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes"]
     user: "999:999"
@@ -274,7 +274,7 @@ services:
   # Runs with your own object storage too: the FTP server needs its
   # certificate either way.
   init-certs:
-    image: alpine:3.24.2
+    image: alpine:3.24.4
     environment:
       FTP_HOST: ${FTP_HOST:?FTP_HOST is not set - copy .env.example to .env and fill it in}
     volumes:
@@ -288,7 +288,7 @@ services:
   # Off until "https" is added to COMPOSE_PROFILES in .env; README.md ("HTTPS
   # and access from outside your network") has the steps.
   caddy:
-    image: caddy:2.11.7-alpine
+    image: caddy:2.11.9-alpine
     profiles: [https]
     restart: unless-stopped
     environment:
