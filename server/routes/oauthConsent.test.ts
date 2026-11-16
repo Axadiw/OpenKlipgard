@@ -1,0 +1,224 @@
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
+import request from 'supertest';
+import express from 'express';
+import pg from 'pg';
+import { randomUUID } from 'crypto';
+import { __setPoolForTest } from '../db/index.js';
+import { createScratchDb, type ScratchDb } from '../testing/scratch-db.js';
+import { installEditionHooks } from '../hooks.js';
+import { installEditionGuards } from '../middleware/editionGuards.js';
+
+
+const TEST_URL = process.env.MIGRATE_TEST_DATABASE_URL ?? process.env.DATABASE_URL;
+const describeIfDb = TEST_URL ? describe : describe.skip;
+
+vi.mock('../config.js', async () => {
+  const real = await vi.importActual<typeof import('../config.js')>('../config.js');
+  return {
+    ...real,
+    CONFIG: { ...real.CONFIG, internalMcpUrl: 'http://mocked-mcp', internalApiKey: 'test-key' },
+  };
+});
+
+const fetchMock = vi.fn();
+vi.stubGlobal('fetch', fetchMock);
+
+
+describeIfDb('API broker /api/v0/oauth/consent/:txn', () => {
+  let pool: pg.Pool;
+  let scratch: ScratchDb | undefined;
+  let app: express.Express;
+  let userId: number;
+  let clientId: string;
+  let txnId: string;
+  let asAdmin = false;
+
+  beforeAll(async () => {
+    scratch = await createScratchDb({ max: 5 });
+    pool = scratch.pool;
+    __setPoolForTest(pool);
+
+    await pool.query(
+      `INSERT INTO plans (id, name, disk_space_bytes, monthly_transfer_bytes) VALUES (1, 'free', 1000000, 1000000) ON CONFLICT DO NOTHING`,
+    );
+    const u = await pool.query(
+      `INSERT INTO users (uuid, email, password_hash, active, email_verified, plan_id)
+       VALUES ($1, $2, 'x', true, true, 1) RETURNING id`,
+      [randomUUID(), `api-consent-${Date.now()}@example.com`],
+    );
+    userId = u.rows[0].id;
+    clientId = randomUUID();
+    await pool.query(
+      `INSERT INTO oauth_clients (client_id, client_name, redirect_uris, created_by_user_id)
+       VALUES ($1, 'Claude Desktop', ARRAY['http://127.0.0.1:9999/cb'], $2)`,
+      [clientId, userId],
+    );
+    txnId = randomUUID();
+    await pool.query(
+      `INSERT INTO oauth_authorization_txns (txn_id, client_id, redirect_uri, scope, state, code_challenge, code_challenge_method, resource)
+       VALUES ($1, $2, 'http://127.0.0.1:9999/cb', 'videos:read', 'st-1', 'cc', 'S256', 'https://klipgard.com/mcp')`,
+      [txnId, clientId],
+    );
+
+    const { default: oauthConsentRouter } = await import('./oauthConsent.js');
+    app = express();
+    app.use(express.json());
+    // Inject req.user (mirror real requireAuth output)
+    app.use((req, _res, next) => { (req as any).user = { userId, isAdmin: asAdmin }; next(); });
+    app.use('/api/v0/oauth/consent', oauthConsentRouter);
+  }, 60_000);
+  afterAll(async () => {
+    await scratch?.drop();
+  });
+  beforeEach(() => { fetchMock.mockReset(); });
+
+  it('GET returns client_name + scopes + redirect_uri for a fresh txn', async () => {
+    const res = await request(app).get(`/api/v0/oauth/consent/${txnId}`);
+    expect(res.status).toBe(200);
+    expect(res.body.clientName).toBe('Claude Desktop');
+    expect(res.body.scopes).toEqual(['videos:read']);
+    expect(res.body.redirectUri).toBe('http://127.0.0.1:9999/cb');
+  });
+
+  it('GET returns 404 for unknown txn', async () => {
+    const res = await request(app).get(`/api/v0/oauth/consent/${randomUUID()}`);
+    expect(res.status).toBe(404);
+  });
+
+  it('GET returns 404 for expired txn', async () => {
+    const oldId = randomUUID();
+    await pool.query(
+      `INSERT INTO oauth_authorization_txns (txn_id, client_id, redirect_uri, scope, state, code_challenge, code_challenge_method, resource, created_at)
+       VALUES ($1, $2, 'http://x', 'videos:read', 'st', 'cc', 'S256', 'r', NOW() - interval '11 minutes')`,
+      [oldId, clientId],
+    );
+    const res = await request(app).get(`/api/v0/oauth/consent/${oldId}`);
+    expect(res.status).toBe(404);
+  });
+
+  it('[ARCH-017] POST approve forwards to MCP with internal key in both header names', async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ redirect_url: 'http://127.0.0.1:9999/cb?code=mcp_ac_xyz&state=st-1' }),
+    });
+    const res = await request(app)
+      .post(`/api/v0/oauth/consent/${txnId}`)
+      .send({ decision: 'approve', scopes: ['videos:read'] });
+    expect(res.status).toBe(200);
+    expect(res.body.redirectUrl).toContain('code=mcp_ac_xyz');
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://mocked-mcp/mcp/oauth/internal/consent-callback',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ 'X-Internal-Key': 'test-key', 'X-Internal-Api-Key': 'test-key' }),
+      }),
+    );
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as any).body);
+    expect(body.userId).toBe(userId);
+    expect(body.decision).toBe('approve');
+    expect(body.grantedScopes).toBe('videos:read');
+  });
+
+  it('POST deny forwards to MCP', async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ redirect_url: 'http://127.0.0.1:9999/cb?error=access_denied&state=st-1' }),
+    });
+    const res = await request(app)
+      .post(`/api/v0/oauth/consent/${txnId}`)
+      .send({ decision: 'deny' });
+    expect(res.status).toBe(200);
+    expect(res.body.redirectUrl).toContain('error=access_denied');
+  });
+
+  it('POST rejects unknown decision', async () => {
+    const res = await request(app)
+      .post(`/api/v0/oauth/consent/${txnId}`)
+      .send({ decision: 'maybe' });
+    expect(res.status).toBe(400);
+  });
+
+  it('POST returns 502 when MCP callback fails', async () => {
+    fetchMock.mockResolvedValueOnce({ ok: false, status: 500 });
+    const res = await request(app)
+      .post(`/api/v0/oauth/consent/${txnId}`)
+      .send({ decision: 'approve', scopes: ['videos:read'] });
+    expect(res.status).toBe(502);
+  });
+
+  it('an inactive owner cannot approve an MCP consent', async () => {
+    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ redirect_url: 'http://127.0.0.1:9999/cb?code=x' }) });
+    await pool.query(`UPDATE users SET active = false WHERE id = $1`, [userId]);
+    try {
+      const res = await request(app)
+        .post(`/api/v0/oauth/consent/${txnId}`)
+        .send({ decision: 'approve', scopes: ['videos:read'] });
+      expect(res.status).toBe(403);
+      expect(res.body.error).toBe('Account unavailable');
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      await pool.query(`UPDATE users SET active = true WHERE id = $1`, [userId]);
+    }
+  });
+
+  it("POST approve applies the edition's sign-in rule before any grant is minted", async () => {
+    installEditionHooks({
+      signInRefusal: (u) => (u.emailVerified === false ? { status: 403, body: { error: 'confirm', code: 'EMAIL_NOT_VERIFIED' } } : null),
+    });
+    await pool.query('UPDATE users SET email_verified = false WHERE id = $1', [userId]);
+    try {
+      const res = await request(app)
+        .post(`/api/v0/oauth/consent/${txnId}`)
+        .send({ decision: 'approve', scopes: ['videos:read'] });
+      expect(res.status).toBe(403);
+      expect(res.body.code).toBe('EMAIL_NOT_VERIFIED');
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      await pool.query('UPDATE users SET email_verified = true WHERE id = $1', [userId]);
+      installEditionHooks(undefined);
+    }
+  });
+
+  describe('[MCP-219] the edition owner gate on approve', () => {
+    // The Cloud edition installs a gate that keeps an administrator out of the
+    // recording surfaces. The shared tree cannot import it, so the same shape
+    // is installed here.
+    const adminRefusal = (req: any, res: any, next: any) => {
+      if (req.user?.isAdmin) { res.status(403).json({ error: 'Admin users cannot access recordings' }); return; }
+      next();
+    };
+    beforeEach(() => { installEditionGuards({ owner: adminRefusal }); asAdmin = true; });
+    afterAll(() => { installEditionGuards(undefined); });
+    afterEach(() => { installEditionGuards(undefined); asAdmin = false; });
+
+    it('an administrator cannot approve an MCP consent', async () => {
+      const res = await request(app)
+        .post(`/api/v0/oauth/consent/${txnId}`)
+        .send({ decision: 'approve', scopes: ['videos:read'] });
+      expect(res.status).toBe(403);
+      expect(res.body.error).toBe('Admin users cannot access recordings');
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('an administrator can still deny', async () => {
+      fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ redirect_url: 'http://127.0.0.1:9999/cb?error=access_denied' }) });
+      const res = await request(app).post(`/api/v0/oauth/consent/${txnId}`).send({ decision: 'deny' });
+      expect(res.status).toBe(200);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('a customer approves as before', async () => {
+      asAdmin = false;
+      fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ redirect_url: 'http://127.0.0.1:9999/cb?code=x' }) });
+      const res = await request(app).post(`/api/v0/oauth/consent/${txnId}`).send({ decision: 'approve', scopes: ['videos:read'] });
+      expect(res.status).toBe(200);
+    });
+
+    it('without an installed gate (self-hosted) an administrator approves', async () => {
+      installEditionGuards(undefined);
+      fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ redirect_url: 'http://127.0.0.1:9999/cb?code=x' }) });
+      const res = await request(app).post(`/api/v0/oauth/consent/${txnId}`).send({ decision: 'approve', scopes: ['videos:read'] });
+      expect(res.status).toBe(200);
+    });
+  });
+});

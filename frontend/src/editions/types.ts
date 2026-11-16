@@ -1,0 +1,115 @@
+// frontend/src/editions/types.ts
+//
+// The seam between the shared core and an *edition* of the web app. The core
+// renders the recordings app (grid, timeline, player, settings) and asks the
+// edition for everything else: marketing/legal pages, registration, admin
+// surfaces, the sign-in methods beyond email + password, analytics. Klipgard
+// Cloud fills every slot; the self-hosted edition (editions/selfhost.tsx)
+// leaves them empty. `src/edition.ts` is the one file that differs per edition.
+import type { ComponentType, ReactNode } from 'react';
+import type { RouteObject } from 'react-router-dom';
+import type { OAuthResult } from '../api';
+import type { Language } from '../i18n';
+
+export interface PasskeyChallenge {
+  sessionId: string;
+  options: unknown;
+}
+
+export interface LoginResult {
+  token: string;
+  refreshToken: string;
+  user: { id: string; email: string; isAdmin: boolean; active: boolean };
+}
+
+/** Callbacks a sign-in slot uses to talk to the shared login form. */
+export interface LoginSlotCallbacks {
+  onSuccess: (result: LoginResult) => void;
+  onError: (message: string) => void;
+  onRateLimit: (retryAfterSeconds: number) => void;
+  onBan: (ban: { until: string | null; reason: string | null; indefinite: boolean }) => void;
+  /** The server refused the sign-in with 403 EMAIL_NOT_VERIFIED (the address must be confirmed first). */
+  onEmailNotVerified?: () => void;
+}
+
+export interface PasskeyLoginSlot {
+  /**
+   * A challenge for the "Sign in with a passkey" button. It never asks the
+   * server which method an account uses (that question was an account-existence
+   * oracle): the answer does not depend on the email. May throw ApiError.
+   */
+  start: () => Promise<PasskeyChallenge>;
+  /** The challenge a server attached to its 400 `passkeyRequired` answer, if any. */
+  fromPasskeyRequired: (body: unknown) => PasskeyChallenge | null;
+  Stage: ComponentType<LoginSlotCallbacks & { email: string; challenge: PasskeyChallenge; onUseBackup: () => void; onBack: () => void }>;
+  BackupStage: ComponentType<{ email: string; rememberMe: boolean; onCancel: () => void }>;
+}
+
+/** An extra tab an edition adds to the Settings page (owner accounts only). */
+export interface SettingsTabSlot {
+  /** Route path under /settings, also the nav link target. */
+  path: string;
+  /** Translation key of the nav label. */
+  labelKey: string;
+  element: ReactNode;
+  icon?: ReactNode;
+  /** Hook deciding whether the tab is listed (default: always). */
+  useVisible?: () => boolean;
+}
+
+export interface FrontendEdition {
+  name: 'selfhost' | 'cloud';
+  /** Root-level routes: marketing, legal, help, email flows … */
+  publicRoutes: RouteObject[];
+  /** Routes under the force-anonymous gate (registration). */
+  anonymousRoutes: RouteObject[];
+  /** Routes inside the authed app shell (admin panel). */
+  shellRoutes: RouteObject[];
+  /** What an anonymous visitor sees at "/". null ⇒ straight to /login. */
+  AnonymousHome: ComponentType | null;
+  /** Where an operator (admin) account lands after sign-in; null ⇒ same as an owner. */
+  operatorHome: string | null;
+  /** Rendered beneath the authed app (cloud: the marketing footer). */
+  Footer: ComponentType | null;
+  /** Wraps standalone flow pages such as OAuth consent. */
+  FlowLayout: ComponentType<{ children: ReactNode }>;
+  /** Mounted once at the root, outside the router outlet (cloud: cookie banner). */
+  RootExtras: ComponentType | null;
+  /** Route gate keeping operator accounts out of the recording views (renders an Outlet). */
+  RequireOwner: ComponentType;
+  login: {
+    OAuthButtons: ComponentType<{ onResult: (r: OAuthResult) => void; onConsentChange: (consenting: boolean) => void }> | null;
+    BanNotice: ComponentType<{ until: string | null; reason: string | null; indefinite: boolean }> | null;
+    /** Links under the email form (register, forgot password, home). */
+    EmailStageLinks: ComponentType | null;
+    passkey: PasskeyLoginSlot | null;
+    /**
+     * Shown under "confirm your e-mail address" when a sign-in is refused
+     * with 403 EMAIL_NOT_VERIFIED (cloud: "Send the link again"). Absent ⇒
+     * the message alone.
+     */
+    EmailNotVerifiedAction?: ComponentType<{ email: string }> | null;
+    /**
+     * Where to go once signed in, read from the query the verification link
+     * redirects to (cloud: the plan a paid sign-up pays for next). Absent or
+     * null ⇒ the usual destination.
+     */
+    verifiedDestination?: (params: URLSearchParams) => { pathname: string; search: string } | null;
+  };
+  /**
+   * The Settings → Profile tab (password, sign-in methods, account). null ⇒
+   * no tab and no route: the account is defined by the install's
+   * configuration, not edited in the app.
+   */
+  ProfileTab: ComponentType | null;
+  /** Extra Settings tabs (owner accounts). Empty/absent ⇒ the core tabs only. */
+  settingsTabs?: SettingsTabSlot[];
+  /** Rendered inside the access-locked banner as a call to action. */
+  LockedBannerAction?: ComponentType | null;
+  /** Mounted inside the authed shell next to the player (cloud: account modals). */
+  ShellExtras: ComponentType | null;
+  /** Extra translations merged over the core catalogs at boot. */
+  i18n: Partial<Record<Language, Record<string, string>>>;
+  /** Boot-time side effects (error monitoring, analytics). */
+  init: () => void;
+}
