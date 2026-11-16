@@ -233,7 +233,7 @@ services:
   # tags, so they are pinned by digest (looked up 2026-10-16). Root so it can
   # read the generated certificates.
   minio:
-    image: cgr.dev/chainguard/minio:latest@sha256:2136d593beacf4461187035eca949fe49abd589d5079735025c711ca58fee0c8
+    image: cgr.dev/chainguard/minio:latest@sha256:1ec745a06a986762f89e68e855fc189f403941eff8c0a5f94767e92c8e39d3f5
     profiles: [bundled-storage]
     user: "0:0"
     restart: unless-stopped
