@@ -1,5 +1,5 @@
 # Base images are pinned to exact versions; Dependabot proposes updates.
-FROM rust:1.99.1-slim-bookworm AS builder
+FROM rust:1.100.0-slim-bookworm AS builder
 RUN apt-get update && apt-get install -y --no-install-recommends \
         pkg-config libssl-dev git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
