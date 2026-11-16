@@ -1,0 +1,4 @@
+# A self-hosted Klipgard is a private recordings archive — nothing on it is
+# meant for search engines. (The Klipgard Cloud build ships its own policy.)
+User-agent: *
+Disallow: /
