@@ -404,7 +404,7 @@ export function VideoControls({ videoRef, containerRef, mediaKey, visible = true
         title={playing ? t('player.pause') : t('player.play')}
         onClick={togglePlay}
       >
-        {buffering && <KlipgardLoader size={30} tone="white" cornersOnly decorative className="video-controls-spinner" data-testid="player-buffering" />}
+        {buffering && <KlipgardLoader size={30} tone="dark" cornersOnly decorative className="video-controls-spinner" data-testid="player-buffering" />}
         {playing ? (
           <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>
         ) : (

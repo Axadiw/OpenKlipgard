@@ -22,12 +22,12 @@ export const CORNER_TRANSFORMS = [
 export const SMALL_BELOW = 24;
 export const MIN_SIZE = 12;
 
-export type LoaderTone = 'brand' | 'white' | 'content';
+export type LoaderTone = 'brand' | 'dark' | 'content';
 
 export interface KlipgardLoaderProps {
   /** Rendered width and height in px. Default 28. */
   size?: number;
-  /** brand = theme colours; white = on video; content = currentColor (inside filled controls). */
+  /** brand = theme colours; dark = dark-surface colours in both themes (on video); content = currentColor (inside filled controls). */
   tone?: LoaderTone;
   /** Draw the corners only, also at 24 px and larger (for example around the play icon). */
   cornersOnly?: boolean;

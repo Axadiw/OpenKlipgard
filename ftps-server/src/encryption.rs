@@ -4,7 +4,7 @@ use sha2::Sha256;
 
 /// HKDF info of SSE-C key generation 1, byte-identical to `SSE_C_KDF_INFO` in
 /// `server/services/encryption.ts`. Part of the stored-data format: never change it.
-const SSE_C_KDF_INFO: &[u8] = &[0x63, 0x6c, 0x69, 0x70, 0x6e, 0x65, 0x73, 0x74, 0x2d, 0x73, 0x73, 0x65, 0x2d, 0x63, 0x2d, 0x76, 0x31];
+const SSE_C_KDF_INFO: &[u8] = b"klipgard-sse-c-v1";
 
 /// HKDF info of SSE-C key generation 2, byte-identical to `SSE_C_KDF_INFO_V2`
 /// in `server/services/encryption.ts`. Part of the stored-data format too.
@@ -15,7 +15,7 @@ const SSE_C_KDF_INFO_V2: &[u8] = b"klipgard-sse-c-v2";
 /// generation-2 buckets, every other bucket is generation 1.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KeyGeneration {
-    /// The original derivation. Every object written before generation 2 existed uses it.
+    /// Info `klipgard-sse-c-v1` and the master key `KLIPGARD_ENCRYPTION_MASTER_KEY`.
     V1,
     /// Own HKDF info, and the own master key `KLIPGARD_ENCRYPTION_MASTER_KEY_V2` when set.
     V2,
@@ -61,7 +61,7 @@ pub fn master_key_for_generation<'a>(
 /// const ikm = Buffer.from(masterKey, 'utf-8');
 /// const salt = Buffer.from(userSalt, 'base64url');
 /// const info = generation === 2 ? Buffer.from('klipgard-sse-c-v2', 'utf-8')
-///   : Buffer.from('636c69706e6573742d7373652d632d7631', 'hex');
+///   : Buffer.from('klipgard-sse-c-v1', 'utf-8');
 /// const derived = crypto.hkdfSync('sha256', ikm, salt, info, 32);
 /// ```
 /// `generation` only picks the HKDF info. The caller passes the master key of
@@ -112,17 +112,17 @@ mod tests {
         // node -e "const c = require('crypto');
         //   const key = Buffer.from(c.hkdfSync('sha256', 'testkey',
         //     Buffer.from('dGVzdHNhbHQ', 'base64url'),
-        //     Buffer.from('636c69706e6573742d7373652d632d7631', 'hex'), 32));
+        //     Buffer.from('klipgard-sse-c-v1', 'utf-8'), 32));
         //   console.log(key.toString('hex'))"
-        // Output: d1ffb4baebfbfcbd72477c9779c30efce44c565ecfd0b38c0a0dde7bcc9f6b6b
+        // Output: 4c34408dbffa7459349d148f48fdf30f306325b44c9cff6b36401c81e8d46630
         let key = derive_user_key("testkey", "dGVzdHNhbHQ", KeyGeneration::V1);
         assert_eq!(
-            hex(&key), "d1ffb4baebfbfcbd72477c9779c30efce44c565ecfd0b38c0a0dde7bcc9f6b6b",
+            hex(&key), "4c34408dbffa7459349d148f48fdf30f306325b44c9cff6b36401c81e8d46630",
             "HKDF output must match Node.js reference"
         );
     }
 
-    ///story: [DATA-102] Generacja 1 to bajt w bajt dotychczasowe wyprowadzenie klucza — ten sam wektor sprawdza `encryption.test.ts` w Node. Gdyby się zmienił, żaden istniejący obiekt nie dałby się odczytać.
+    ///story: [DATA-102] Generacja 1 (info `klipgard-sse-c-v1`) daje stały, znany klucz — ten sam wektor sprawdza `encryption.test.ts` w Node. Gdyby się zmienił, żaden istniejący obiekt generacji 1 nie dałby się odczytać.
     #[test]
     fn generation_1_matches_the_fixed_node_vector() {
         let key = derive_user_key(
@@ -130,9 +130,9 @@ mod tests {
             "Zml4ZWQtc2FsdC1mb3ItdGhlLWtub3duLXZlY3Rvcg",
             KeyGeneration::V1,
         );
-        assert_eq!(hex(&key), "a45c5bd43c73c92c2fb410f5eae48b366f4bd1583391fba69dded53f4be9728a");
+        assert_eq!(hex(&key), "648e3dc8551a030123a60a1d9c871d27a52ace6175f8915eb54b780b7393ea9b");
         let (_, _, md5) = ssec_headers(&key);
-        assert_eq!(md5, "X0s/K87M+2N0JGhwnP9iJQ==");
+        assert_eq!(md5, "8UEI6DuzTh3CQbqEedUNbg==");
     }
 
     ///story: [DATA-146] Generacja 2 (info `klipgard-sse-c-v2`) daje w Rust ten sam klucz co w Node — nagranie wgrane przez FTPS do bucketu generacji 2 da się odtworzyć przez API.

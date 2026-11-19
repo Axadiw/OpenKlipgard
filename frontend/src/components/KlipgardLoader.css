@@ -6,8 +6,8 @@
 .kg-loader-k{fill:#E4F8ED}
 [data-theme="light"] .kg-loader-corners{fill:#047857}
 [data-theme="light"] .kg-loader-k{fill:#1F2937}
-.kg-loader--white .kg-loader-corners,[data-theme="light"] .kg-loader--white .kg-loader-corners,
-.kg-loader--white .kg-loader-k,[data-theme="light"] .kg-loader--white .kg-loader-k{fill:#fff}
+.kg-loader--dark .kg-loader-corners,[data-theme="light"] .kg-loader--dark .kg-loader-corners{fill:#6EE7B7}
+.kg-loader--dark .kg-loader-k,[data-theme="light"] .kg-loader--dark .kg-loader-k{fill:#E4F8ED}
 .kg-loader--content .kg-loader-corners,[data-theme="light"] .kg-loader--content .kg-loader-corners,
 .kg-loader--content .kg-loader-k,[data-theme="light"] .kg-loader--content .kg-loader-k{fill:currentColor}
 .kg-loader-c{transform-box:view-box;transform-origin:512px 512px;animation:kg-loader-breathe 1.6s ease-in-out infinite}

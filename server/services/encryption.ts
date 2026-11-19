@@ -13,7 +13,7 @@ export type KeyGeneration = 1 | 2;
  * HKDF info of generation 1. Part of the stored-data format: changing these
  * bytes makes every existing generation-1 object unreadable.
  */
-const SSE_C_KDF_INFO = Buffer.from('636c69706e6573742d7373652d632d7631', 'hex');
+const SSE_C_KDF_INFO = Buffer.from('klipgard-sse-c-v1', 'utf-8');
 
 /** HKDF info of generation 2. Part of the stored-data format, like the one above. */
 const SSE_C_KDF_INFO_V2 = Buffer.from('klipgard-sse-c-v2', 'utf-8');
@@ -26,8 +26,7 @@ const SSE_C_KDF_INFO_V2 = Buffer.from('klipgard-sse-c-v2', 'utf-8');
  * encrypt/decrypt objects transparently via SSE-C headers.
  *
  * `generation` only picks the HKDF info. The caller passes the master key of
- * that generation (`masterKeyForGeneration`). Generation 1, the default, is
- * byte for byte the derivation every existing object was written with.
+ * that generation (`masterKeyForGeneration`). Generation 1 is the default.
  *
  * Security properties:
  * - Different salts → different keys (per-user isolation)

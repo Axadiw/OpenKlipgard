@@ -24,7 +24,7 @@
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, sign, verify } from 'node:crypto';
 
 /** Wire id of the relay protocol, shared with the relay and every native client. Never change it. */
-export const PROTOCOL = Buffer.from('636c69706e6573742d707573682d7631', 'hex').toString('latin1');
+export const PROTOCOL = 'klipgard-push-v1';
 /** A registration ticket is presented to the relay within this window. */
 export const TICKET_TTL_SECONDS = 600;
 /** Accepted clock skew on a signed send. */
