@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 // @ts-expect-error the web package has no @types/node; vitest runs this file under node
 import { createHash } from 'node:crypto';
 import nginxConf from '../../nginx.conf?raw';
-import nginxCloudConf from '../../nginx.cloud.conf?raw';
 import indexHtml from '../index.html?raw';
 
 // [WEB-SHELL-001] [WEB-SHELL-075] [WEB-SHELL-076] [WEB-SHELL-077] [WEB-SHELL-078]
@@ -75,7 +74,9 @@ describe('boot splash in index.html [WEB-SHELL-075]', () => {
   });
 });
 
-describe.each([['nginx.conf', nginxConf], ['nginx.cloud.conf', nginxCloudConf]])('%s CSP', (_name, conf) => {
+// The Cloud nginx.cloud.conf is checked by cloud/nginxCsp.test.ts: this file is in the
+// shared tree and must not read a file that only the Cloud edition has.
+describe.each([['nginx.conf', nginxConf]])('%s CSP', (_name, conf) => {
   it('script-src allows the hash of every inline script index.html runs', () => {
     const inline = [...indexHtml.matchAll(/<script(?![^>]*\b(?:src|type)=)[^>]*>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
     expect(inline.length).toBeGreaterThan(0);
