@@ -95,9 +95,10 @@ jobs:
       - name: Fresh install
         run: node scripts/smoke-test.mjs
 
-  # Upgrade from the latest release to this tree, on a runner of its own: after
-  # a fresh install of this tree, the images and build cache it leaves behind
-  # broke the install of the older release in the same job.
+  # Upgrade from the latest release to this tree, as a job of its own, so a
+  # failure while installing the older release never hides the result of the
+  # fresh install of this tree. (Installs of 1.0.0 sometimes left a recording
+  # in pending_sidecar; 1.0.1 and later did not.)
   smoke-upgrade:
     runs-on: ubuntu-latest
     timeout-minutes: 45
