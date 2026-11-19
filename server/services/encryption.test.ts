@@ -6,27 +6,27 @@ import {
 import { sseV2BucketsFromEnv } from '../config.js';
 import { story } from '../testing/story.js';
 
-// Fixed vectors. Generation 1 was computed with the code from BEFORE key
-// generations existed (`deriveUserKey(master, salt)` on master), so it pins the
-// stored-data format: every existing object was written with this derivation.
-// The same vectors are asserted in ftps-server/src/encryption.rs.
+// Fixed vectors, computed with `crypto.hkdfSync` and the info strings of
+// DATA-146. They pin the stored-data format: an object is readable only with
+// the key it was written with. The same vectors are asserted in
+// ftps-server/src/encryption.rs.
 const VECTOR_MASTER = 'klipgard-test-master-key-0123456789abcdef';
 const VECTOR_MASTER_V2 = 'klipgard-second-master-key-fedcba9876543210';
 const VECTOR_SALT = 'Zml4ZWQtc2FsdC1mb3ItdGhlLWtub3duLXZlY3Rvcg'; // base64url('fixed-salt-for-the-known-vector')
-const GEN1_HEX = 'a45c5bd43c73c92c2fb410f5eae48b366f4bd1583391fba69dded53f4be9728a';
-const GEN1_MD5 = 'X0s/K87M+2N0JGhwnP9iJQ==';
+const GEN1_HEX = '648e3dc8551a030123a60a1d9c871d27a52ace6175f8915eb54b780b7393ea9b';
+const GEN1_MD5 = '8UEI6DuzTh3CQbqEedUNbg==';
 const GEN2_HEX = '7bdfd2c6c6dbf23763b7abb2a0718d5669602a56d7ba1cc80b7ca392a8a34403';
 const GEN2_MD5 = 'wxBF2et9TLlzDZwiywCt0w==';
 const GEN2_OWN_MASTER_HEX = '611cfcc3d72613b48ab23f9a4a470585f1db1cb1b29f55f983a0675edf6b6aa6';
 
 describe('SSE-C key generations', () => {
-  it('generation 1 is byte for byte the original derivation', (ctx) => {
-    story(ctx, '[DATA-102] Generacja 1 daje dokładnie ten sam klucz co kod sprzed wprowadzenia generacji — wektor policzony starym kodem. Każda zmiana tu oznacza, że żadne istniejące nagranie nie da się odczytać.');
+  it('generation 1 (info klipgard-sse-c-v1) equals the fixed vectors', (ctx) => {
+    story(ctx, '[DATA-102] Generacja 1 (info "klipgard-sse-c-v1") daje dokładnie ten sam klucz co stały wektor, który sprawdza też serwer FTPS w Rust. Każda zmiana tu oznacza, że żadne istniejące nagranie generacji 1 nie da się odczytać.');
     expect(deriveUserKey(VECTOR_MASTER, VECTOR_SALT).toString('hex')).toBe(GEN1_HEX);
     expect(deriveUserKey(VECTOR_MASTER, VECTOR_SALT, 1).toString('hex')).toBe(GEN1_HEX);
     expect(ssecHeaders(deriveUserKey(VECTOR_MASTER, VECTOR_SALT, 1)).SSECustomerKeyMD5).toBe(GEN1_MD5);
     // The vector the Rust FTPS server has asserted all along.
-    expect(deriveUserKey('testkey', 'dGVzdHNhbHQ').toString('hex')).toBe('d1ffb4baebfbfcbd72477c9779c30efce44c565ecfd0b38c0a0dde7bcc9f6b6b');
+    expect(deriveUserKey('testkey', 'dGVzdHNhbHQ').toString('hex')).toBe('4c34408dbffa7459349d148f48fdf30f306325b44c9cff6b36401c81e8d46630');
   });
 
   it('generation 2 is a different key, equal to the vectors the FTPS server asserts', (ctx) => {

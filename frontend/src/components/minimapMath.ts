@@ -63,7 +63,8 @@ export function windowInside(span: Span, viewStart: number, viewEnd: number): bo
 export function minimapSpan(prev: Span | null, viewStart: number, viewEnd: number, nowWall: number): Span {
   if (prev && windowInside(prev, viewStart, viewEnd)) return prev;
   let next: Span | null = null;
-  if (nowWall > 0) {
+  if (prev) next = shiftedSpan(prev, viewStart, viewEnd);
+  else if (nowWall > 0) {
     const today = spanEndingOn(nowWall);
     if (windowInside(today, viewStart, viewEnd)) next = today;
   }
@@ -74,6 +75,19 @@ export function minimapSpan(prev: Span | null, viewStart: number, viewEnd: numbe
   // when the bounds are the same: TimelineView stores the span during render and
   // compares by identity, and a fresh equal object would loop (React error #301).
   return prev && prev.start === next.start && prev.end === next.end ? prev : next;
+}
+
+/** [WEB-TIMELINE-095]: the span after the window left `prev`. It keeps the day
+ *  count of `prev` (or grows to what the window needs) and moves by whole days only
+ *  as far as the window needs, so the rectangle stays at the edge it crossed instead
+ *  of jumping to the other end of the strip. */
+export function shiftedSpan(prev: Span, viewStart: number, viewEnd: number): Span {
+  const days = Math.max(Math.round((prev.end - prev.start) / DAY_MS), spanDaysFor(viewStart, viewEnd));
+  if (viewStart < prev.start) {
+    const startDay = Math.floor(viewStart / DAY_MS) * DAY_MS;
+    return { start: startDay, end: startDay + days * DAY_MS };
+  }
+  return spanEndingOn(Math.max(viewStart, viewEnd - 1), days);
 }
 
 /** [WEB-TIMELINE-098]: one bin per wall-clock hour, by event start. */

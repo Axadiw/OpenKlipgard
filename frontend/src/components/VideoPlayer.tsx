@@ -403,7 +403,7 @@ export function VideoPlayer({ event, view, events, onClose, onNavigate }: Props)
               <BlurredThumbnailBackdrop eventId={event.id} visible={isVideoLoading} />
               {isVideoLoading && (
                 <div className="video-buffer-overlay" data-testid="player-buffer">
-                  {!stallRetry.failed && !accessLocked && <KlipgardLoader size={44} tone="white" decorative />}
+                  {!stallRetry.failed && !accessLocked && <KlipgardLoader size={44} tone="dark" decorative />}
                   <div className="video-buffer-label" data-testid="player-buffer-label">
                     {bufferLabel}
                   </div>

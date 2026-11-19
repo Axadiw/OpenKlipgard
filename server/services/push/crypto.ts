@@ -12,7 +12,7 @@ import { createECDH, createCipheriv, createDecipheriv, hkdfSync, randomBytes } f
 
 export const PUSH_CRYPTO_VERSION = 1 as const;
 const CURVE = 'prime256v1';
-const INFO = Buffer.from('636c69706e6573742d707573682d7631', 'hex').toString('latin1');
+const INFO = 'klipgard-push-v1';
 
 export interface EncryptedPush {
   v: typeof PUSH_CRYPTO_VERSION;

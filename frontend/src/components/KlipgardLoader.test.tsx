@@ -57,9 +57,9 @@ describe('KlipgardLoader (WEB-SHELL-079, CLIENT-086)', () => {
     ]);
   });
 
-  it('tone classes select white (video) and currentColor (filled controls)', () => {
-    const { container, rerender } = render(<KlipgardLoader tone="white" />);
-    expect(container.querySelector('svg')!.classList.contains('kg-loader--white')).toBe(true);
+  it('tone classes select dark-surface colours (video) and currentColor (filled controls)', () => {
+    const { container, rerender } = render(<KlipgardLoader tone="dark" />);
+    expect(container.querySelector('svg')!.classList.contains('kg-loader--dark')).toBe(true);
     rerender(<KlipgardLoader tone="content" />);
     expect(container.querySelector('svg')!.classList.contains('kg-loader--content')).toBe(true);
   });

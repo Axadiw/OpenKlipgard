@@ -42,6 +42,27 @@ describe('minimap span', () => {
     expect(minimapSpan(prev, D('2026-10-02'), D('2026-10-04'), now)).not.toBe(prev);
   });
 
+  it('moves by whole days only as far as the window needs [WEB-TIMELINE-095]', (ctx) => {
+    story(ctx, 'Okno wychodzi poza zakres: zakres przesuwa się o pełne dni, a prostokąt zostaje przy krawędzi, którą przekroczył.');
+    const prev = { start: D('2026-09-26'), end: D('2026-10-03') };
+    const now = Date.parse('2026-11-12T10:00:00Z');
+    // Past the start: the new span starts on the first day of the window.
+    expect(minimapSpan(prev, D('2026-09-25') + 12 * HOUR_MS, D('2026-09-26') + 12 * HOUR_MS, now))
+      .toEqual({ start: D('2026-09-25'), end: D('2026-10-02') });
+    // Past the end: the new span ends on the last day of the window.
+    expect(minimapSpan(prev, D('2026-10-02') + 12 * HOUR_MS, D('2026-10-03') + 12 * HOUR_MS, now))
+      .toEqual({ start: D('2026-09-27'), end: D('2026-10-04') });
+    // A week-long window that crosses the start keeps 8 days and does not flip to the far end.
+    const wide = { start: D('2026-09-25'), end: D('2026-10-03') };
+    expect(minimapSpan(wide, D('2026-09-24') + 6 * HOUR_MS, D('2026-10-01') + 6 * HOUR_MS, now))
+      .toEqual({ start: D('2026-09-24'), end: D('2026-10-02') });
+    // A wider span keeps its day count when the window moves out of it.
+    const month = { start: D('2026-09-01'), end: D('2026-10-01') };
+    const moved = minimapSpan(month, D('2026-10-01'), D('2026-10-02'), now);
+    expect(moved.end - moved.start).toBe(30 * DAY_MS);
+    expect(moved.end).toBe(D('2026-10-02'));
+  });
+
   it('works while now is unknown', (ctx) => {
     story(ctx, 'Bez znanego "teraz" zakres wynika z okna.');
     expect(minimapSpan(null, D('2026-11-12'), D('2026-11-13'), 0)).toEqual(SPAN);

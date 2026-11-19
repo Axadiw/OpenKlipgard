@@ -1999,7 +1999,7 @@ export function TimelineView({ cameraFilter, onPlay: _onPlay, allCameras }: Prop
                     {isVideoLoading && (
                       <div className="timeline-inline-video-buffer-overlay"
                            data-testid="timeline-inline-video-buffer">
-                        {!stallRetry.failed && <KlipgardLoader size={44} tone="white" decorative />}
+                        {!stallRetry.failed && <KlipgardLoader size={44} tone="dark" decorative />}
                         <div className="timeline-inline-video-buffer-label"
                              data-testid="timeline-inline-video-buffer-label">
                           {bufferLabel}
