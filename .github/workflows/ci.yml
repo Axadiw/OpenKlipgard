@@ -94,8 +94,21 @@ jobs:
           node-version-file: .nvmrc
       - name: Fresh install
         run: node scripts/smoke-test.mjs
-      # Upgrade from the latest release to this tree. Skipped until the first
-      # release exists.
+
+  # Upgrade from the latest release to this tree, on a runner of its own: after
+  # a fresh install of this tree, the images and build cache it leaves behind
+  # broke the install of the older release in the same job.
+  smoke-upgrade:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      # Skipped until the first release exists.
       - name: Find the previous release
         id: prev
         run: echo "tag=$(git describe --tags --abbrev=0 2>/dev/null || true)" >> "$GITHUB_OUTPUT"
