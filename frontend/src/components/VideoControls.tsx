@@ -6,6 +6,7 @@ import { subscribeCachedRanges } from '../lib/scrubCache/client';
 import { cachedFractionSegments, usableCachedRanges } from '../lib/scrubPreview/cachedSegments';
 import { videoCacheKey } from '../sw/videoRequest';
 import { ScrubPreviewBubble } from './ScrubPreviewBubble';
+import { KlipgardLoader } from './KlipgardLoader';
 
 const SPEEDS = [0.5, 1, 1.5, 2];
 const LS_VOLUME = 'klipgard.player.volume';
@@ -403,7 +404,7 @@ export function VideoControls({ videoRef, containerRef, mediaKey, visible = true
         title={playing ? t('player.pause') : t('player.play')}
         onClick={togglePlay}
       >
-        {buffering && <span className="video-controls-spinner" data-testid="player-buffering" aria-hidden="true" />}
+        {buffering && <KlipgardLoader size={30} tone="white" cornersOnly decorative className="video-controls-spinner" data-testid="player-buffering" />}
         {playing ? (
           <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>
         ) : (

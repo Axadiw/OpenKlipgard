@@ -12,6 +12,7 @@ import {
 } from './cameraProfiles/draft';
 import type { Draft } from './cameraProfiles/draft';
 import './cameraProfiles/cameraProfiles.css';
+import { KlipgardLoader } from './KlipgardLoader';
 
 /**
  * Shared dark-mode styling for the native mode <select>. A bare <select>
@@ -291,7 +292,7 @@ export function CameraProfilesSection() {
       <h3 style={{ margin: '0 0 4px', fontSize: '1rem' }}>{t('settings.cameraProfiles.title')}</h3>
       <p className="settings-hint">{t('settings.cameraProfiles.hint')}</p>
 
-      {loading && <div className="spinner" />}
+      {loading && <KlipgardLoader />}
       {error && <div className="settings-error" style={{ marginBottom: 12 }}>{error}</div>}
 
       {!loading && mode !== null && (

@@ -13,14 +13,14 @@
  * starts queueing on socket acquisition and timing out — the wedge symptom
  * detected by utils/socketPoolWedge.ts.
  *
- * `stream.pipeline` propagates destroy() through the entire chain on any
+ * pipeS3ToResponse propagates destroy() through the entire chain on any
  * failure, so the S3 body is torn down, the underlying socket is closed
  * (not pooled), and the agent immediately frees the slot. That's the cure
  * the wedge detector exists to mitigate.
  *
  * --- Slow-consumer kill (replaces the concurrency cap) ---
  *
- * `stream.pipeline` handles the ABORT case correctly, but it does NOT handle
+ * Abort teardown handles the ABORT case correctly, but it does NOT handle
  * the SLOW case. A client reading at 5 KB/s (phone on bad 4G, stalled TCP,
  * tab in background) backpressures the pipeline: the response socket's TCP
  * buffer fills, the throttle/res pauses the upstream body, the S3 socket
@@ -44,41 +44,20 @@
  * deploy time via SLOW_CONSUMER_THRESHOLD_KBPS=N if some new failure mode
  * needs different tuning.
  */
-import { pipeline } from 'stream/promises';
+import { finished } from 'stream';
 import type { Readable, Writable, Duplex } from 'stream';
 import type { EventEmitter } from 'events';
 import { recordSlowConsumerKill, type VideoPath } from './metrics.js';
 
 /**
- * Lifecycle events `stream/promises` pipeline + the `eos`/`finished` helpers
- * it calls internally attach to the *destination* stream. On Node 20 those
- * listeners are NOT removed when the pipeline settles — `pipeline` cleans up
- * the source chain but leaves ~4 `close` / 3 `error` / 2 `finish` / 2 `end`
- * handlers dangling on the destination (verified empirically against node
- * v20.20.2).
- *
- * For a per-request Express `ServerResponse` that gets piped exactly once,
- * those ~4 dangling `close` listeners stack on top of Express's own framework
- * listeners (its onfinish/onclose/abort handling) and push the response over
- * the default `MaxListeners = 10` ceiling — that is the source of the
- * `MaxListenersExceededWarning: 11 close listeners added to [ServerResponse]`
- * the thumbnail transaction trips.
- *
- * We do NOT raise the ceiling (that masks the leak). Instead we snapshot the
- * destination's lifecycle listeners *before* the pipeline and, once it has
- * settled, remove exactly the ones the pipeline added — leaving every
- * pre-existing Express/middleware listener untouched. The diff runs only in
- * the `finally`, after `pipeline` has done all of its own work (including the
- * client-abort → destroy-source teardown that happens *before* the promise
- * settles), so stripping these now-dormant listeners cannot change streaming
- * or abort semantics.
+ * `Readable.prototype.pipe` adds one `close`, one `finish`, one `error` and one
+ * `unpipe` listener to its destination and only removes them on unpipe. For a
+ * per-request `ServerResponse` those stack on top of the framework and app
+ * listeners. pipeThrottleToResponse snapshots the destination's lifecycle
+ * listeners before its pipe and, once the throttle settles, removes exactly the
+ * ones the pipe added, leaving every Express / middleware listener untouched.
+ * We do NOT raise the MaxListeners ceiling (that masks the leak).
  */
-// `unpipe` is included alongside the pipeline lifecycle events because the
-// raw `source.pipe(dest)` path (pipeThrottleToResponse below) also leaves an
-// `unpipe` listener on the destination — Node's Readable.prototype.pipe adds
-// one `close`, one `finish`, one `error` AND one `unpipe` listener to `dest`
-// per pipe (verified on node v20/v22). The `pipeline()` path does not add an
-// `unpipe`, so snapshot+diff is a safe superset for both callers.
 const PIPELINE_DEST_LIFECYCLE_EVENTS = ['close', 'error', 'finish', 'end', 'unpipe'] as const;
 
 function snapshotDestListeners(dest: Writable): Map<string, Set<unknown>> {
@@ -106,8 +85,7 @@ function removePipelineDestListeners(dest: Writable, before: Map<string, Set<unk
 /**
  * `throttle.pipe(res)` for the multi-zone stitch paths in routes/events/video.ts
  * (streamPatchedMp4 / streamCleanFrameMp4 / the patched-moov pass-through),
- * with the same listener-leak guard `pipeS3ToResponse` applies to its
- * `pipeline()` calls.
+ * with a listener-leak guard: the pipe-added listeners come off `res` again.
  *
  * Why this matters: Node's `Readable.prototype.pipe` registers a `close`,
  * `finish`, `error` and `unpipe` listener on the *destination*. On a per-request
@@ -289,8 +267,9 @@ export function attachSlowConsumerMonitor(
 /**
  * Pipe an S3 GetObject Body into the HTTP response, optionally through a
  * single throttle transform. Resolves when the response is fully written;
- * rejects (and destroys the source) on any failure — including the client
- * disconnecting mid-stream or triggering the slow-consumer kill.
+ * rejects (and destroys the source chain and `res`) on any failure —
+ * including the client disconnecting mid-stream or triggering the
+ * slow-consumer kill.
  *
  * Slow-kill default flipped to ON in v0.10.272 along with the diagnostic
  * logging in attachSlowConsumerMonitor (set `SLOW_KILL_DEBUG=1` to enable).
@@ -302,43 +281,128 @@ export function attachSlowConsumerMonitor(
  */
 const SLOW_CONSUMER_KILL_ENABLED = (process.env.ENABLE_SLOW_CONSUMER_KILL ?? 'true') === 'true';
 
-export async function pipeS3ToResponse(
+const noop = (): void => undefined;
+
+function prematureCloseError(): Error {
+  return Object.assign(new Error('Premature close'), { code: 'ERR_STREAM_PREMATURE_CLOSE' });
+}
+
+/**
+ * WHY this is not `stream.pipeline(body, throttle, res)` (the production
+ * `MaxListenersExceededWarning: 11 close listeners added to [ServerResponse]`
+ * on the thumbnail and video routes): one `pipeline()` call puts SEVEN `close` listeners on
+ * its destination (its destroyer, two `eos` per destroyer and per pipe, and
+ * `Readable.pipe`'s own). The warning fires when the 11th listener is added,
+ * not when they are left behind, so removing them after the pipeline settles
+ * (the earlier fix) came too late: the per-request base of a `ServerResponse`
+ * (Sentry's http integration, httpMetrics, the concurrency cap, the route's
+ * transfer accounting) plus those seven crossed 10 on every thumbnail and
+ * pass-through video request.
+ *
+ * So the pump is written by hand: `data` → `res.write`, a `drain` wait on
+ * backpressure, `end` → `res.end()`. On `res` it keeps ONE `close` listener
+ * (client abort / premature close), one `finish` and one `error`, and removes
+ * all of them when it settles. The source side uses `finished()` on the body
+ * and the throttle, which adds listeners to those per-request streams only.
+ */
+export function pipeS3ToResponse(
   body: Readable,
   res: Writable,
   throttle?: Duplex,
   metricsPath: VideoPath = 'patched',
 ): Promise<void> {
-  let stopMonitor: () => void = () => undefined;
-  if (SLOW_CONSUMER_KILL_ENABLED) {
-    stopMonitor = attachSlowConsumerMonitor(res, (rateKbps) => {
-      // info-level: the kill is expected, intentional behaviour. Sentry
-      // captureConsoleIntegration captures warn+error for the api service,
-      // so a warn here surfaces every slow-client drop as a noise issue.
-      // Match the streamPatchedMp4 path (routes/events.ts) for consistency.
-      console.log(
-        `[s3Stream] slow consumer killed: ${rateKbps.toFixed(1)} KB/s sustained (threshold ${SLOW_CONSUMER_THRESHOLD_KBPS} KB/s)`,
-      );
-      recordSlowConsumerKill(metricsPath);
-      if (!body.destroyed) body.destroy(new Error(SLOW_CONSUMER_ERROR_MESSAGE));
-    });
-  }
+  return new Promise<void>((resolve, reject) => {
+    const src: Readable = throttle ?? body;
+    const chain: Array<Readable | Duplex> = throttle ? [body, throttle] : [body];
+    const sourceCleanups: Array<() => void> = [];
+    let settled = false;
+    let waitingDrain = false;
+    let stopMonitor: () => void = noop;
 
-  // Snapshot res's lifecycle listeners so we can strip exactly the ones the
-  // pipeline leaves behind (see PIPELINE_DEST_LIFECYCLE_EVENTS doc above).
-  const destListenersBefore = snapshotDestListeners(res);
-  try {
-    if (throttle) {
-      await pipeline(body, throttle, res);
-    } else {
-      await pipeline(body, res);
+    const onData = (chunk: unknown): void => {
+      if (settled) return;
+      if (!res.write(chunk) && !waitingDrain) {
+        waitingDrain = true;
+        src.pause();
+        res.once('drain', onDrain);
+      }
+    };
+    const onDrain = (): void => {
+      waitingDrain = false;
+      if (!settled) src.resume();
+    };
+    const onSrcEnd = (): void => {
+      if (!settled) res.end();
+    };
+    const onFinish = (): void => settle(null);
+    const onResClose = (): void => {
+      // `close` after `finish` is the normal end; `close` without it is a
+      // client abort (or a socket torn down under us).
+      settle(res.writableFinished ? null : prematureCloseError());
+    };
+    const onResError = (err: Error): void => settle(err);
+
+    function settle(err: Error | null): void {
+      if (settled) return;
+      settled = true;
+      stopMonitor();
+      src.off('data', onData);
+      src.off('end', onSrcEnd);
+      res.off('drain', onDrain);
+      res.off('finish', onFinish);
+      res.off('close', onResClose);
+      res.off('error', onResError);
+      for (const c of sourceCleanups) c();
+      if (err) {
+        // Tear the whole chain down so the S3 socket goes back to the agent
+        // (see the module comment). A destroyed stream re-emits the error on
+        // a later tick; the no-op handlers keep that from becoming an
+        // uncaught 'error' (the caller already gets it through `reject`).
+        if (throttle) body.unpipe(throttle);
+        for (const s of chain) {
+          s.on('error', noop);
+          if (!s.destroyed) s.destroy(err);
+        }
+        if (!res.destroyed) {
+          res.on('error', noop);
+          res.destroy(err);
+        }
+        reject(err);
+      } else {
+        resolve();
+      }
     }
-  } finally {
-    stopMonitor();
-    // Remove the dangling close/error/finish listeners pipeline added to res.
-    // Without this they accumulate (one set per pipe) and trip
-    // MaxListenersExceededWarning on the ServerResponse.
-    removePipelineDestListeners(res, destListenersBefore);
-  }
+
+    if (res.destroyed || res.writableEnded) {
+      settle(prematureCloseError());
+      return;
+    }
+
+    if (SLOW_CONSUMER_KILL_ENABLED) {
+      stopMonitor = attachSlowConsumerMonitor(res, (rateKbps) => {
+        // info-level: the kill is expected, intentional behaviour. Sentry
+        // captureConsoleIntegration captures warn+error for the api service,
+        // so a warn here surfaces every slow-client drop as a noise issue.
+        // Match the streamPatchedMp4 path (routes/events.ts) for consistency.
+        console.log(
+          `[s3Stream] slow consumer killed: ${rateKbps.toFixed(1)} KB/s sustained (threshold ${SLOW_CONSUMER_THRESHOLD_KBPS} KB/s)`,
+        );
+        recordSlowConsumerKill(metricsPath);
+        if (!body.destroyed) body.destroy(new Error(SLOW_CONSUMER_ERROR_MESSAGE));
+      });
+    }
+
+    for (const s of chain) {
+      // An error, or a close before the end, anywhere in the source chain.
+      sourceCleanups.push(finished(s, (err) => { if (err) settle(err); }));
+    }
+    res.once('finish', onFinish);
+    res.once('close', onResClose);
+    res.on('error', onResError);
+    src.on('end', onSrcEnd);
+    if (throttle) body.pipe(throttle);
+    src.on('data', onData);
+  });
 }
 
 /**

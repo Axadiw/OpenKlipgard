@@ -3,6 +3,7 @@ import { useRouteError } from 'react-router-dom';
 import { captureException } from '../lib/errorReporting';
 import { getActiveLanguage, type Language } from '../i18n';
 import { isChunkLoadError, shouldReloadOnce } from '../utils/chunkReload';
+import { KlipgardLoader } from './KlipgardLoader';
 
 // react-router renders this as the root route's `errorElement`, which replaces
 // the whole <RootLayout> subtree — so it sits OUTSIDE I18nProvider and cannot
@@ -96,7 +97,7 @@ export function RouteErrorBoundary() {
   if (reloading) {
     return (
       <div role="status" style={containerStyle}>
-        <div className="spinner" />
+        <KlipgardLoader decorative />
         <p>{copy.stale}</p>
       </div>
     );

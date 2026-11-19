@@ -6,7 +6,7 @@ import { useTranslation } from '../i18n';
 import { edition } from '../edition';
 import type { PasskeyChallenge } from '../editions/types';
 import { VersionFooter } from './VersionFooter';
-import { Wordmark } from './Wordmark';
+import { KlipgardLogo, LOGO_NAME } from './KlipgardLogo';
 import { useCountdown } from '../hooks/useCountdown';
 import { formatDuration } from '../utils/format';
 import { hasPasskeyHint, setPasskeyHint } from '../utils/passkeyHint';
@@ -225,8 +225,9 @@ export function LoginPage() {
   return (
     <div className="auth-page">
       <form className="auth-form" onSubmit={stage === 'email' ? submitEmail : submitPassword}>
-        <img src="/logo.svg" alt="" className="auth-logo" />
-        <h1><Wordmark text={t('login.title')} /></h1>
+        {t('login.title') === LOGO_NAME
+          ? <h1 className="auth-brand"><KlipgardLogo height={48} className="auth-logo" /></h1>
+          : <h1>{t('login.title')}</h1>}
         {ban && BanNotice && <BanNotice until={ban.until} reason={ban.reason} indefinite={ban.indefinite} />}
         {info && <div className="info" style={{ color: 'var(--accent, #6EE7B7)', marginBottom: '8px', textAlign: 'center' }}>{info}</div>}
         {displayError && <div className="error">{displayError}</div>}

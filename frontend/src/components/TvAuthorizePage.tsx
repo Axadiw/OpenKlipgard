@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api, ApiError } from '../api';
 import { useTranslation } from '../i18n';
 import { VersionFooter } from './VersionFooter';
+import { KlipgardLogo } from './KlipgardLogo';
 
 // Canonical = upper-case, A–Z/0–9 only, exactly 8 chars (mirrors the server's
 // normalizeUserCode). We keep the user's raw text — which carries the display
@@ -108,7 +109,7 @@ export function TvAuthorizePage() {
     return (
       <div className="auth-page">
         <div className="auth-form" data-testid="tv-success">
-          <img src="/logo.svg" alt="" className="auth-logo" />
+          <KlipgardLogo height={48} className="auth-logo" />
           <h1>{t('tv.title')}</h1>
           <div className="info" style={{ color: 'var(--accent, #6EE7B7)', marginBottom: '16px', textAlign: 'center' }}>
             {t('tv.success')}
@@ -126,7 +127,7 @@ export function TvAuthorizePage() {
           in the field (both routed through handleSubmit). A pre-filled ?code=
           never authorizes on its own. */}
       <form className="auth-form" onSubmit={handleSubmit}>
-        <img src="/logo.svg" alt="" className="auth-logo" />
+        <KlipgardLogo height={48} className="auth-logo" />
         <h1>{t('tv.title')}</h1>
         <p style={{ color: 'var(--text-muted, #888)', fontSize: '13px', marginBottom: '8px', textAlign: 'center' }}>
           {t('tv.subtitle')}

@@ -1251,4 +1251,124 @@ describe('Events routes — cross-user access prevention', () => {
       expect(vi.mocked(updateTransferUsage)).not.toHaveBeenCalled();
     });
   });
+
+  // =========================================================================
+  // MaxListenersExceededWarning — `close` listeners on the ServerResponse
+  // =========================================================================
+  //
+  // `MaxListenersExceededWarning: 11 close listeners added to [ServerResponse]`
+  // fires when the 11th listener is ADDED, so what counts is the PEAK during
+  // the request, not what is left afterwards. Production puts a base on every
+  // response before the route runs (Sentry's http integration ~3, httpMetrics
+  // 1); the route itself must stay far enough below 10 that the base never
+  // tips it over.
+
+  describe('GET media routes — peak close listeners on the ServerResponse', () => {
+    /** The most `close` listeners the route may hold on `res` at any one time. */
+    const ROUTE_CLOSE_LISTENER_BUDGET = 4;
+    const TRACKED = ['on', 'once', 'addListener', 'prependListener', 'prependOnceListener'] as const;
+
+    function buildCountingApp(peaks: number[]) {
+      const app = express();
+      app.use((req: Request, res: Response, next: NextFunction) => {
+        req.user = { ...USER_A };
+        const slot = peaks.push(0) - 1;
+        const target = res as unknown as Record<string, (ev: string | symbol, fn: (...a: unknown[]) => void) => unknown>;
+        for (const name of TRACKED) {
+          const orig = target[name].bind(res);
+          target[name] = (ev, fn) => {
+            const r = orig(ev, fn);
+            if (ev === 'close') peaks[slot] = Math.max(peaks[slot], res.listenerCount('close'));
+            return r;
+          };
+        }
+        next();
+      });
+      app.use('/events', eventsRouter);
+      return app;
+    }
+
+    async function throttleNextRequest() {
+      // 95 % of the monthly transfer: the soft-throttle band, so the route
+      // streams through a throttle Transform (the body → throttle → res chain).
+      const { getUserQuota } = await import('../db/queries/storage.js');
+      vi.mocked(checkAndResetTransfer).mockResolvedValueOnce({ transferUsageBytes: 950 } as never);
+      vi.mocked(getUserQuota).mockResolvedValueOnce({ transferLimitBytes: 1000 } as never);
+    }
+
+    it('keeps the thumbnail route within the budget, plain and throttled, over many requests', async (ctx) => {
+      story(ctx, 'Błąd z produkcji: 27 tys. ostrzeżeń "11 close listeners added to [ServerResponse]" na miniaturach i wideo. Jedno wywołanie stream.pipeline() dokładało SIEDEM listenerów close do odpowiedzi, a ostrzeżenie leci w chwili dodania jedenastego, więc sprzątanie po zakończeniu przychodziło za późno. Teraz trasa trzyma na odpowiedzi najwyżej kilka listenerów close przez cały czas trwania żądania.');
+      vi.mocked(getEventByIdForOwner).mockResolvedValue(EVENT_OWNED_BY_A);
+      vi.mocked(headObject).mockResolvedValue({ contentLength: 11, lastModified: new Date() });
+      vi.mocked(getObject).mockImplementation(async () => ({ body: fakeStream(), contentRange: undefined }));
+      const peaks: number[] = [];
+      const app = buildCountingApp(peaks);
+
+      for (let i = 0; i < 6; i++) {
+        if (i % 2 === 1) await throttleNextRequest();
+        const res = await request(app).get('/events/evt-001/thumbnail');
+        expect(res.status).toBe(200);
+      }
+
+      expect(peaks).toHaveLength(6);
+      expect(Math.max(...peaks)).toBeLessThanOrEqual(ROUTE_CLOSE_LISTENER_BUDGET);
+    });
+
+    it('keeps the thumbnail route within the budget when the object store fails mid-stream', async (ctx) => {
+      story(ctx, 'Ścieżka błędu (zerwany odczyt z magazynu po wysłaniu nagłówków) też nie może przekroczyć budżetu listenerów close.');
+      vi.mocked(getEventByIdForOwner).mockResolvedValue(EVENT_OWNED_BY_A);
+      vi.mocked(headObject).mockResolvedValue({ contentLength: 1024, lastModified: new Date() });
+      vi.mocked(getObject).mockImplementation(async () => ({
+        body: new Readable({
+          read() {
+            this.push(Buffer.from('partial'));
+            setImmediate(() => this.destroy(new Error('S3 mid-stream hiccup')));
+          },
+        }),
+        contentRange: undefined,
+      }));
+      const peaks: number[] = [];
+      const app = buildCountingApp(peaks);
+
+      for (let i = 0; i < 3; i++) {
+        await request(app).get('/events/evt-001/thumbnail').timeout({ response: 4000, deadline: 6000 }).catch(() => undefined);
+      }
+
+      expect(peaks).toHaveLength(3);
+      expect(Math.max(...peaks)).toBeLessThanOrEqual(ROUTE_CLOSE_LISTENER_BUDGET);
+    });
+
+    it('keeps the pass-through video route within the budget across its object-store reads', async (ctx) => {
+      story(ctx, 'Wideo bez sidecara: trasa robi kilka odczytów z magazynu na jedno żądanie (sonda nagłówka, potem dane, zwykłe i z dławieniem transferu). Każdy z nich ma zdejmować swój listener close, a strumień danych dokłada co najwyżej jeden.');
+      vi.mocked(getEventByIdForOwner).mockResolvedValue(EVENT_OWNED_BY_A);
+      const fileBody = 'x'.repeat(2048);
+      vi.mocked(headObject).mockResolvedValue({ contentLength: fileBody.length, lastModified: new Date() });
+      vi.mocked(getObject).mockImplementation(async (_b: string, _k: string, _s: string, byteRange?: string) => {
+        // The moov head probe reads `bytes=0-32`; a 404 there sends the route
+        // down the raw pass-through stream (as in the tests above).
+        if (byteRange === 'bytes=0-32') {
+          throw Object.assign(new Error('NoSuchKey'), { name: 'NoSuchKey', $metadata: { httpStatusCode: 404 } });
+        }
+        const m = /^bytes=(\d+)-(\d+)$/.exec(byteRange ?? '');
+        const slice = m ? fileBody.slice(Number(m[1]), Number(m[2]) + 1) : fileBody;
+        return { body: fakeStream(slice), contentRange: undefined };
+      });
+      const peaks: number[] = [];
+      const app = buildCountingApp(peaks);
+
+      for (let i = 0; i < 4; i++) {
+        if (i % 2 === 1) await throttleNextRequest();
+        const full = await request(app).get('/events/evt-001/video/00');
+        const ranged = await request(app).get('/events/evt-001/video/00').set('Range', 'bytes=0-899');
+        expect(full.status).toBe(200);
+        expect(ranged.status).toBe(206);
+      }
+      await new Promise((r) => setImmediate(r));
+
+      expect(peaks).toHaveLength(8);
+      // Every request read the object store more than once (head probe + data).
+      expect(vi.mocked(getObject).mock.calls.length).toBeGreaterThanOrEqual(16);
+      expect(Math.max(...peaks)).toBeLessThanOrEqual(ROUTE_CLOSE_LISTENER_BUDGET);
+    });
+  });
 });

@@ -1,0 +1,22 @@
+/* The Klipgard loader, WEB-SHELL-079 / CLIENT-086: the breathe motion of the
+   brand book. Transform and opacity only. Each corner scales about the centre
+   of the mark (512,512 on the 1024 grid), so transform-box is the view box. */
+.kg-loader{display:block;flex:none;overflow:visible}
+.kg-loader-corners{fill:#6EE7B7}
+.kg-loader-k{fill:#E4F8ED}
+[data-theme="light"] .kg-loader-corners{fill:#047857}
+[data-theme="light"] .kg-loader-k{fill:#1F2937}
+.kg-loader--white .kg-loader-corners,[data-theme="light"] .kg-loader--white .kg-loader-corners,
+.kg-loader--white .kg-loader-k,[data-theme="light"] .kg-loader--white .kg-loader-k{fill:#fff}
+.kg-loader--content .kg-loader-corners,[data-theme="light"] .kg-loader--content .kg-loader-corners,
+.kg-loader--content .kg-loader-k,[data-theme="light"] .kg-loader--content .kg-loader-k{fill:currentColor}
+.kg-loader-c{transform-box:view-box;transform-origin:512px 512px;animation:kg-loader-breathe 1.6s ease-in-out infinite}
+.kg-loader-c2{animation-delay:.1s}
+.kg-loader-c3{animation-delay:.2s}
+.kg-loader-c4{animation-delay:.3s}
+@keyframes kg-loader-breathe{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(.82);opacity:.55}}
+@keyframes kg-loader-fade{0%,100%{opacity:1}50%{opacity:.55}}
+@media (prefers-reduced-motion:reduce){
+  .kg-loader-c{animation:none}
+  .kg-loader{animation:kg-loader-fade 2.4s ease-in-out infinite}
+}

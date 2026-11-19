@@ -4,7 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import { useTranslation } from '../i18n';
 import { FRONTEND_VERSION } from '../api';
 import { NotificationsBell } from './NotificationsBell';
-import { Wordmark } from './Wordmark';
+import { KlipgardLogo, LOGO_NAME } from './KlipgardLogo';
 import { HeaderNav, HeaderSettingsButton } from './HeaderNav';
 import { edition } from '../edition';
 import { usePwaInstall } from '../hooks/usePwaInstall';
@@ -67,8 +67,9 @@ export function Header({ backendVersion }: Props) {
   return (
     <header className="app-header">
       <a className="header-brand" href={brandHref} onClick={handleBrandClick}>
-        <img src="/logo.svg" alt="" className="header-logo" />
-        <h1 className="header-title"><Wordmark text={t('header.title')} /></h1>
+        <h1 className="header-title">
+          {t('header.title') === LOGO_NAME ? <KlipgardLogo height={28} /> : t('header.title')}
+        </h1>
       </a>
       {showNav && <HeaderNav />}
       <div className="header-actions">

@@ -1,10 +1,11 @@
 import { Suspense, type ReactElement } from 'react';
+import { KlipgardLoader } from './components/KlipgardLoader';
 
-// Suspense fallback — reuses the global `.spinner` CSS, centered.
+// Suspense fallback: the Klipgard loader, centred (WEB-002, WEB-SHELL-079).
 export function RouteFallback() {
   return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '50vh' }}>
-      <div className="spinner" />
+      <KlipgardLoader />
     </div>
   );
 }

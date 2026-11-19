@@ -54,17 +54,39 @@
       color: #9aa0a6; font-family: Inter, system-ui, sans-serif;
       z-index: 2147483647; }
     #boot-overlay > div { text-align: center; }
-    #boot-overlay .boot-spinner { width: 28px; height: 28px;
-      border: 3px solid #2a2d35; border-top-color: #7c8cff;
-      border-radius: 50%; animation: boot-spin .8s linear infinite;
-      margin: 0 auto; }
     #boot-overlay p { margin-top: 1.5rem; font-size: 0.875rem; }
-    @keyframes boot-spin { to { transform: rotate(360deg); } }
     html[data-auth-check="1"] body > #root { display: none; }
     html[data-theme="light"] #boot-overlay { background: #ffffff;
       color: #3c4043; }
-    html[data-theme="light"] #boot-overlay .boot-spinner {
-      border-color: #e0e0e0; border-top-color: #3367d6; }
+    /* The Klipgard mark (WEB-SHELL-075) with the focus motion (WEB-SHELL-076) and,
+       for a long load, the breathe loop (WEB-SHELL-077): CSS only, transform,
+       opacity and filter only. It shows only after 150 ms, so a page that boots
+       sooner never flashes it. Times are from the page start: focus 150-1050 ms
+       (corners 0-700 ms, K 300-900 ms of it), then the corners breathe, clockwise
+       from the top left, 100 ms apart. */
+    .kg-boot { --kg-c: #6EE7B7; --kg-k: #E4F8ED; }
+    html[data-theme="light"] .kg-boot { --kg-c: #047857; --kg-k: #1F2937; }
+    #root > .kg-boot { position: fixed; inset: 0; display: flex;
+      align-items: center; justify-content: center; }
+    .kg-boot svg { display: block; width: 96px; height: 96px; margin: 0 auto;
+      overflow: visible; opacity: 0; animation: kg-show .2s ease-out .15s forwards; }
+    .kg-boot .kg-c { fill: var(--kg-c); transform-box: view-box; transform-origin: 512px 512px;
+      animation: kg-in .7s cubic-bezier(.2,.9,.25,1.15) .15s both, kg-breathe 1.6s ease-in-out 1.05s infinite; }
+    .kg-boot .kg-tr { animation-delay: .15s, 1.15s; }
+    .kg-boot .kg-br { animation-delay: .15s, 1.25s; }
+    .kg-boot .kg-bl { animation-delay: .15s, 1.35s; }
+    .kg-boot .kg-k { fill: var(--kg-k); transform-box: view-box; transform-origin: 512px 512px;
+      animation: kg-k .6s ease-out .45s both; }
+    @keyframes kg-show { to { opacity: 1; } }
+    @keyframes kg-in { 0% { transform: translate(-90px,-90px); opacity: .15; }
+      60% { transform: translate(8px,8px); opacity: 1; } 100% { transform: none; opacity: 1; } }
+    @keyframes kg-k { from { opacity: .35; transform: scale(.94); filter: blur(6px); }
+      to { opacity: 1; transform: none; filter: none; } }
+    @keyframes kg-breathe { 0%, 100% { transform: none; opacity: 1; }
+      50% { transform: scale(.82); opacity: .55; } }
+    @media (prefers-reduced-motion: reduce) {
+      .kg-boot svg, .kg-boot .kg-c, .kg-boot .kg-k { animation: none; opacity: 1; transform: none; }
+    }
   </style>
   <script>
     (function () {
@@ -91,11 +113,11 @@
           var d = document.createElement('div');
           d.id = 'boot-overlay';
           var inner = document.createElement('div');
-          var sp = document.createElement('div');
-          sp.className = 'boot-spinner';
+          inner.className = 'kg-boot';
+          var tpl = document.getElementById('kg-boot-mark');
+          if (tpl) inner.appendChild(tpl.content.cloneNode(true));
           var p = document.createElement('p');
           p.textContent = msg;
-          inner.appendChild(sp);
           inner.appendChild(p);
           d.appendChild(inner);
           (document.body || document.documentElement).appendChild(d);
@@ -108,7 +130,10 @@
 </head>
 <body>
   <script src="/theme-init.js"></script>
-  <div id="root"></div>
+  <!-- The Klipgard mark for the boot overlay above (WEB-SHELL-001) and, inside
+       #root, the boot splash a page shows until React replaces it (WEB-SHELL-075). -->
+  <template id="kg-boot-mark"><svg viewBox="0 0 1024 1024" aria-hidden="true" focusable="false"><path class="kg-c kg-tl" d="M146 346V228A82 82 0 0 1 228 146H346V200H227A27 27 0 0 0 200 227V346Z"/><g transform="matrix(-1 0 0 1 1024 0)"><path class="kg-c kg-tr" d="M146 346V228A82 82 0 0 1 228 146H346V200H227A27 27 0 0 0 200 227V346Z"/></g><g transform="matrix(-1 0 0 -1 1024 1024)"><path class="kg-c kg-br" d="M146 346V228A82 82 0 0 1 228 146H346V200H227A27 27 0 0 0 200 227V346Z"/></g><g transform="matrix(1 0 0 -1 0 1024)"><path class="kg-c kg-bl" d="M146 346V228A82 82 0 0 1 228 146H346V200H227A27 27 0 0 0 200 227V346Z"/></g><path class="kg-k" d="M312 294H416V495L601 294H727L533 505.5L729 730H600L416 521V730H312Z"/></svg></template>
+  <div id="root"><div class="kg-boot" aria-hidden="true"><svg viewBox="0 0 1024 1024" aria-hidden="true" focusable="false"><path class="kg-c kg-tl" d="M146 346V228A82 82 0 0 1 228 146H346V200H227A27 27 0 0 0 200 227V346Z"/><g transform="matrix(-1 0 0 1 1024 0)"><path class="kg-c kg-tr" d="M146 346V228A82 82 0 0 1 228 146H346V200H227A27 27 0 0 0 200 227V346Z"/></g><g transform="matrix(-1 0 0 -1 1024 1024)"><path class="kg-c kg-br" d="M146 346V228A82 82 0 0 1 228 146H346V200H227A27 27 0 0 0 200 227V346Z"/></g><g transform="matrix(1 0 0 -1 0 1024)"><path class="kg-c kg-bl" d="M146 346V228A82 82 0 0 1 228 146H346V200H227A27 27 0 0 0 200 227V346Z"/></g><path class="kg-k" d="M312 294H416V495L601 294H727L533 505.5L729 730H600L416 521V730H312Z"/></svg></div></div>
   <!-- Per-environment keys (ENV-004). Classic script: runs before the deferred module below. -->
   <script src="/runtime-config.js"></script>
   <script type="module" src="/src/main.tsx"></script>

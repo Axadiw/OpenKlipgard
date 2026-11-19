@@ -14,6 +14,7 @@ import { useScrubCacheLifetime } from '../hooks/useScrubCacheLifetime';
 import { computeBufferOverlay } from '../lib/bufferOverlayMath';
 import { canStep, stepOnGrid } from '../lib/frameStep';
 import { analyticsView, track } from '../lib/analytics';
+import { KlipgardLoader } from './KlipgardLoader';
 
 interface Props {
   event: CameraEvent;
@@ -402,7 +403,7 @@ export function VideoPlayer({ event, view, events, onClose, onNavigate }: Props)
               <BlurredThumbnailBackdrop eventId={event.id} visible={isVideoLoading} />
               {isVideoLoading && (
                 <div className="video-buffer-overlay" data-testid="player-buffer">
-                  {!stallRetry.failed && !accessLocked && <div className="spinner" />}
+                  {!stallRetry.failed && !accessLocked && <KlipgardLoader size={44} tone="white" decorative />}
                   <div className="video-buffer-label" data-testid="player-buffer-label">
                     {bufferLabel}
                   </div>

@@ -47,6 +47,6 @@ describe('VideoPlayer — locked account', () => {
     expect(screen.getByText('account.lockedPlayback')).toBeTruthy();
     expect(screen.queryByTestId('player-buffer-retry')).toBeNull();
     expect(screen.queryByTestId('player-buffer-actions')).toBeNull();
-    expect(document.querySelector('.spinner')).toBeNull();
+    expect(document.querySelector('.kg-loader')).toBeNull();
   });
 });

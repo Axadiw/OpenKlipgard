@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { api } from '../api';
 import { useTranslation } from '../i18n';
 import { paletteForCameras } from '../lib/cameraColors';
@@ -8,6 +8,8 @@ import { useShell } from './AuthedShell';
 import { FilterBar } from './FilterBar';
 import { EventList } from './EventList';
 import { ProcessingStatusIndicator } from './ProcessingStatusIndicator';
+import { GridScrollBar } from './GridScrollBar';
+import { usePastToolbar } from '../hooks/usePastToolbar';
 import type { CameraEvent } from '../types';
 import { formatEventDate } from '../utils/format';
 import { track } from '../lib/analytics';
@@ -104,6 +106,47 @@ export function GridView() {
     shell.setBulkDelete({ ids: dayEvents.map(e => e.id), label });
   }, [shell]);
 
+  // ── Scroll chrome (WEB-GRID-120 … 125) ──────────────────────────────
+  // The toolbar sticks to the viewport top and always shows; past it a thin
+  // bottom bar jumps to the top or to the footer. The footer sits under an infinite list, so "to the bottom" first
+  // pauses loading: `armed` until the sentinel enters its trigger zone, then
+  // `holding` until it leaves it again, then `off`.
+  const toolbarRef = useRef<HTMLDivElement>(null);
+  const toolbarEndRef = useRef<HTMLDivElement>(null);
+  const pastToolbar = usePastToolbar(toolbarEndRef);
+  const [toolbarHeight, setToolbarHeight] = useState(0);
+  useEffect(() => {
+    const el = toolbarRef.current;
+    if (!el) return;
+    const measure = () => setToolbarHeight(el.offsetHeight);
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // Room at the end of the page so the fixed bar never covers the footer.
+  useEffect(() => {
+    document.body.classList.add('grid-scroll-bar-space');
+    return () => document.body.classList.remove('grid-scroll-bar-space');
+  }, []);
+
+  const [loadPause, setLoadPause] = useState<'off' | 'armed' | 'holding'>('off');
+  useEffect(() => { setLoadPause('off'); }, [filtersKey]);
+  useEffect(() => { if (!recordings.hasMore) setLoadPause('off'); }, [recordings.hasMore]);
+  const handleSentinelZone = useCallback((inZone: boolean) => {
+    setLoadPause(p => (p === 'armed' && inZone ? 'holding' : p === 'holding' && !inZone ? 'off' : p));
+  }, []);
+  const scrollToTop = useCallback(() => {
+    setLoadPause('off');
+    window.scrollTo({ top: 0, behavior: 'instant' });
+  }, []);
+  const scrollToBottom = useCallback(() => {
+    if (recordings.hasMore) setLoadPause('armed');
+    window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'instant' });
+  }, [recordings.hasMore]);
+
   // Reset every filter back to the pristine default (no cameras, range mode,
   // no dates/times). Shared by the FilterBar's Clear control AND the grid's
   // filtered empty-state Clear filters button so both do exactly the same
@@ -120,7 +163,11 @@ export function GridView() {
   return (
     <>
       <ProcessingStatusIndicator />
-      <div className="toolbar">
+      <div
+        ref={toolbarRef}
+        className="toolbar grid-toolbar"
+        data-testid="grid-toolbar"
+      >
         <FilterBar
           cameras={recordings.cameras}
           selectedCameras={recordings.filters.cameras}
@@ -178,7 +225,11 @@ export function GridView() {
           <span>{editMode ? t('events.editModeExit') : t('events.editModeEnter')}</span>
         </button>
       </div>
+      <div ref={toolbarEndRef} className="grid-toolbar-end" aria-hidden />
       <EventList
+        loadPaused={loadPause !== 'off'}
+        onSentinelZone={handleSentinelZone}
+        currentDayTop={toolbarHeight}
         events={recordings.events}
         total={recordings.total}
         loading={recordings.loading}
@@ -196,6 +247,7 @@ export function GridView() {
         hasActiveFilter={recordings.hasActiveFilter}
         onClearFilters={handleClearFilters}
       />
+      <GridScrollBar visible={pastToolbar} onTop={scrollToTop} onBottom={scrollToBottom} />
     </>
   );
 }
