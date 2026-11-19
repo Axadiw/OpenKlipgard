@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { api, type ProcessingStatus } from '../api';
 import { useTranslation } from '../i18n';
+import { KlipgardLoader } from './KlipgardLoader';
 
 const POLL_INTERVAL_MS = 15_000;
 
@@ -58,7 +59,7 @@ export function ProcessingStatusIndicator() {
         aria-controls={canExpand ? 'processing-status-files' : undefined}
         data-testid="processing-status-toggle"
       >
-        <span className="processing-status-spinner" aria-hidden="true" />
+        <KlipgardLoader size={12} decorative className="processing-status-spinner" />
         <span className="processing-status-label">
           {t('processing.inProgress', { count: String(inProgressCount) })}
         </span>

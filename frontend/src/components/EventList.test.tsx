@@ -178,4 +178,59 @@ describe('EventList', () => {
       expect(container.querySelector('.current-day-bar')?.textContent).toBe(secondLabel);
     });
   });
+
+  describe('load pause', () => {
+    type Obs = { cb: IntersectionObserverCallback; options?: IntersectionObserverInit };
+    let observers: Obs[];
+
+    beforeEach(() => {
+      observers = [];
+      vi.stubGlobal(
+        'IntersectionObserver',
+        class {
+          constructor(cb: IntersectionObserverCallback, options?: IntersectionObserverInit) {
+            observers.push({ cb, options });
+          }
+          observe = vi.fn();
+          disconnect = vi.fn();
+          unobserve = vi.fn();
+        },
+      );
+    });
+
+    const sentinelObserver = () => observers.filter(o => o.options?.rootMargin === '200px 0px').at(-1)!;
+    const fire = (inZone: boolean) => act(() => {
+      sentinelObserver().cb([{ isIntersecting: inZone } as IntersectionObserverEntry], {} as IntersectionObserver);
+    });
+
+    it('[WEB-GRID-125] a paused sentinel reports its zone but loads no batch', (ctx) => {
+      story(ctx, 'Po „Na dół” lista ma się zatrzymać, żeby było widać stopkę: wartownik dalej mówi, czy jest w strefie, ale nie dociąga kolejnej porcji.');
+      const onLoadMore = vi.fn();
+      const onSentinelZone = vi.fn();
+      render(<EventList events={[baseEvent]} {...baseProps} hasMore onLoadMore={onLoadMore} loadPaused onSentinelZone={onSentinelZone} />);
+      fire(true);
+      expect(onSentinelZone).toHaveBeenLastCalledWith(true);
+      expect(onLoadMore).not.toHaveBeenCalled();
+    });
+
+    it('[WEB-GRID-050] without a pause the sentinel loads the next batch', (ctx) => {
+      story(ctx, 'Bez pauzy nic się nie zmienia: wartownik w strefie 200 px dociąga kolejne 50 nagrań.');
+      const onLoadMore = vi.fn();
+      render(<EventList events={[baseEvent]} {...baseProps} hasMore onLoadMore={onLoadMore} />);
+      fire(true);
+      expect(onLoadMore).toHaveBeenCalledTimes(1);
+    });
+
+    it('[WEB-GRID-122] the current-day bar sits under a shown toolbar', (ctx) => {
+      story(ctx, 'Gdy przyklejony pasek narzędzi wraca po przewinięciu w górę, belka dnia zjeżdża pod niego zamiast się z nim nakładać.');
+      const newer: CameraEvent = { ...baseEvent, id: 'e2', timestamp: '2026-04-02T10:00:00.000Z', date: '2026/04/02' };
+      const { container } = render(<EventList events={[newer, baseEvent]} {...baseProps} currentDayTop={41} />);
+      container.querySelectorAll('.day-header').forEach((el, i) => {
+        (el as HTMLElement).getBoundingClientRect = () => ({ top: [-500, -10][i] } as DOMRect);
+      });
+      const dayObs = observers.find(o => o.options?.rootMargin === undefined)!;
+      act(() => { dayObs.cb([], {} as IntersectionObserver); });
+      expect((container.querySelector('.current-day-slot') as HTMLElement).style.top).toBe('41px');
+    });
+  });
 });

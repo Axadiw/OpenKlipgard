@@ -153,6 +153,69 @@ describe('pipeS3ToResponse — socket lifecycle', () => {
     expect(res.listenerCount('end')).toBeLessThanOrEqual(2);
   });
 
+  it('holds at most one close listener on res WHILE streaming (plain, throttled, aborted)', async (ctx) => {
+    story(
+      ctx,
+      'Ostrzeżenie MaxListenersExceededWarning leci w chwili DODANIA jedenastego listenera close, nie po zakończeniu. stream.pipeline(body, throttle, res) dokładał siedem naraz, więc sprzątanie po settle nie pomagało. pipeS3ToResponse ma w trakcie strumieniowania trzymać na res co najwyżej jeden listener close, także z throttle i przy zerwaniu przez klienta.',
+    );
+    const trackPeak = (res: Writable): { peak: () => number } => {
+      let peak = res.listenerCount('close');
+      for (const name of ['on', 'once', 'addListener', 'prependListener', 'prependOnceListener'] as const) {
+        const orig = res[name].bind(res) as (ev: string | symbol, fn: (...a: unknown[]) => void) => Writable;
+        (res as unknown as Record<string, unknown>)[name] = (ev: string | symbol, fn: (...a: unknown[]) => void) => {
+          const r = orig(ev, fn);
+          if (ev === 'close') peak = Math.max(peak, res.listenerCount('close'));
+          return r;
+        };
+      }
+      return { peak: () => peak };
+    };
+    const frameworkBase = 5; // stand-in for Sentry + httpMetrics + the route's own listeners
+
+    for (const withThrottle of [false, true]) {
+      const res = new Writable({ write(_c, _e, cb) { cb(); } });
+      for (let i = 0; i < frameworkBase; i++) res.on('close', () => {});
+      const t = trackPeak(res);
+      await pipeS3ToResponse(
+        Readable.from([Buffer.alloc(1024), Buffer.alloc(1024)]),
+        res,
+        withThrottle ? new PassThrough() : undefined,
+      );
+      expect(t.peak()).toBeLessThanOrEqual(frameworkBase + 1);
+      expect(res.listenerCount('close')).toBe(frameworkBase);
+    }
+
+    // Client abort mid-stream.
+    const body = makeInfiniteBody();
+    const res = new PassThrough();
+    res.on('data', () => {});
+    for (let i = 0; i < frameworkBase; i++) res.on('close', () => {});
+    const t = trackPeak(res);
+    const done = pipeS3ToResponse(body, res, new PassThrough()).catch((e: Error) => e);
+    await awaitFirstChunk(res);
+    res.destroy();
+    const err = await done;
+    cleanupLeakedBody(body);
+    expect(err).toBeInstanceOf(Error);
+    expect(body.destroyed).toBe(true);
+    expect(t.peak()).toBeLessThanOrEqual(frameworkBase + 1);
+  });
+
+  it('honours backpressure: a slow res receives every byte in order', async (ctx) => {
+    story(
+      ctx,
+      'Ręczna pompa (zamiast pipeline) musi zachować backpressure: gdy res.write zwraca false, źródło czeka na drain. Klient na wolnym łączu dostaje cały plik, bajt w bajt.',
+    );
+    const chunks = Array.from({ length: 64 }, (_, i) => Buffer.alloc(16 * 1024, i));
+    const received: Buffer[] = [];
+    const res = new Writable({
+      highWaterMark: 1024,
+      write(chunk, _e, cb) { received.push(chunk); setImmediate(cb); },
+    });
+    await pipeS3ToResponse(Readable.from(chunks), res, new PassThrough());
+    expect(Buffer.concat(received).equals(Buffer.concat(chunks))).toBe(true);
+  });
+
   it('resolves cleanly when the source ends naturally', async (ctx) => {
     story(
       ctx,

@@ -30,6 +30,7 @@ import { canStep, stepOnGrid } from '../lib/frameStep';
 import { barClickSeekSec, isSameClipSeek, isMacPlatform, LONG_PRESS_MS, PRECISION_FLASH_MS } from './timelineSeek';
 import type { CameraEvent, ViewId } from '../types';
 import { analyticsView, track } from '../lib/analytics';
+import { KlipgardLoader } from './KlipgardLoader';
 
 interface Props {
   cameraFilter: string[];
@@ -1998,7 +1999,7 @@ export function TimelineView({ cameraFilter, onPlay: _onPlay, allCameras }: Prop
                     {isVideoLoading && (
                       <div className="timeline-inline-video-buffer-overlay"
                            data-testid="timeline-inline-video-buffer">
-                        {!stallRetry.failed && <div className="spinner" />}
+                        {!stallRetry.failed && <KlipgardLoader size={44} tone="white" decorative />}
                         <div className="timeline-inline-video-buffer-label"
                              data-testid="timeline-inline-video-buffer-label">
                           {bufferLabel}
@@ -2166,7 +2167,7 @@ export function TimelineView({ cameraFilter, onPlay: _onPlay, allCameras }: Prop
           {/* Overlays — .timeline-scroll is always mounted so ResizeObserver + wheel listener work */}
           {((loading && visibleEvents.length === 0) || calLoading) && (
             <div className="timeline-loading-overlay">
-              <div className="spinner" />
+              <KlipgardLoader label={t('timeline.loading')} />
             </div>
           )}
           {cameraList.length === 0 && !loading && !calLoading && (

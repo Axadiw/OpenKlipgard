@@ -77,12 +77,38 @@ pub struct AuthResponse {
     #[serde(rename = "encryptionSalt")]
     pub encryption_salt: Option<String>,
     pub reason: Option<String>,
+    /// The answers that carry no `reason` (FTPS-023): failed-login backoff,
+    /// a ban, a source address locked for credential spraying.
+    #[serde(default)]
+    pub locked: bool,
+    #[serde(default)]
+    pub banned: bool,
+    #[serde(rename = "ipLocked", default)]
+    pub ip_locked: bool,
     /// Fingerprint of the credential this login was checked against; sent back
     /// to `session-check`. Absent from an older API, which skips the re-check.
     #[serde(rename = "sessionEpoch")]
     pub session_epoch: Option<String>,
     /// `organic` | `synthetic`. Absent from an older API, which reads as organic.
     pub origin: Option<String>,
+}
+
+impl AuthResponse {
+    /// The reason the `Login failed` log line names (FTPS-023). A refusal without
+    /// any of them is a wrong password or an unknown account.
+    pub fn failure_reason(&self) -> String {
+        if self.ip_locked {
+            "ipLocked".to_string()
+        } else if self.banned {
+            "banned".to_string()
+        } else if self.locked {
+            "locked".to_string()
+        } else {
+            self.reason
+                .clone()
+                .unwrap_or_else(|| "invalid credentials".to_string())
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -663,6 +689,17 @@ impl InternalApi {
 
 #[cfg(test)]
 mod tests {
+
+    ///story: [FTPS-023] Linia `Login failed` nazywa blokadę: odpowiedź `locked`/`banned`/`ipLocked` nie ma pola `reason`, a log pisał „invalid credentials” i wyglądało to na złe hasło (kamery właściciela, 2026-11-17).
+    #[test]
+    fn failure_reason_names_lockouts_and_bans() {
+        let r = |j: &str| serde_json::from_str::<AuthResponse>(j).unwrap().failure_reason();
+        assert_eq!(r(r#"{"valid":false}"#), "invalid credentials");
+        assert_eq!(r(r#"{"valid":false,"locked":true,"lockedUntil":"2026-11-17T08:43:36Z"}"#), "locked");
+        assert_eq!(r(r#"{"valid":false,"banned":true,"bannedUntil":null,"reason":null}"#), "banned");
+        assert_eq!(r(r#"{"valid":false,"ipLocked":true}"#), "ipLocked");
+        assert_eq!(r(r#"{"valid":false,"reason":"access_locked"}"#), "access_locked");
+    }
     use super::*;
 
     ///story: Połączenie z API, które FTPS trzyma w puli, wygasa wcześniej niż keep-alive nasłuchu API — dzięki temu logowanie nigdy nie idzie po połączeniu, które API właśnie zamyka (to dawało losowe 530 dla świeżego użytkownika).

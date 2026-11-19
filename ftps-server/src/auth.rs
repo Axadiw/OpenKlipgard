@@ -94,9 +94,7 @@ impl Authenticator for KlipgardAuth {
             })?;
 
         if !auth_result.valid {
-            let reason = auth_result
-                .reason
-                .unwrap_or_else(|| "invalid credentials".to_string());
+            let reason = auth_result.failure_reason();
             info!(username = username, reason = %reason, "Login failed");
             return Err(AuthenticationError::BadPassword);
         }

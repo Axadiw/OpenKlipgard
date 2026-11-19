@@ -36,9 +36,17 @@ interface Props {
   /** Resets every filter (cameras + dates/times) and reloads — wired to the
    *  filtered empty state's Clear filters button. */
   onClearFilters?: () => void;
+  /** Load pause of WEB-GRID-125: the sentinel reports but does not load. */
+  loadPaused?: boolean;
+  /** Called with true when the sentinel enters the trigger zone and false
+   *  when it leaves it (also once on every observer bind). */
+  onSentinelZone?: (inZone: boolean) => void;
+  /** Distance of the current-day bar from the viewport top, in px: the height
+   *  of the sticky toolbar while it shows past its place (WEB-GRID-122). */
+  currentDayTop?: number;
 }
 
-export function EventList({ events, total: _total, loading, loadingMore, hasMore, onLoadMore, onPlay, thumbSize, onDelete, onDeleteDay, editMode, selectedDays, onToggleDaySelected, cameraColorMap, hasActiveFilter, onClearFilters }: Props) {
+export function EventList({ events, total: _total, loading, loadingMore, hasMore, onLoadMore, onPlay, thumbSize, onDelete, onDeleteDay, editMode, selectedDays, onToggleDaySelected, cameraColorMap, hasActiveFilter, onClearFilters, loadPaused, onSentinelZone, currentDayTop = 0 }: Props) {
   const { t, language } = useTranslation();
   const localeMap: Record<string, Locale> = { pl, de, fr, it, es, no: nb };
   const locale = localeMap[language] || enUS;
@@ -141,13 +149,15 @@ export function EventList({ events, total: _total, loading, loadingMore, hasMore
     if (!target || !hasMore) return;
     const obs = new IntersectionObserver(
       entries => {
-        if (entries[0]?.isIntersecting && hasMore && !loadingMore) onLoadMore();
+        const inZone = !!entries[0]?.isIntersecting;
+        onSentinelZone?.(inZone);
+        if (inZone && hasMore && !loadingMore && !loadPaused) onLoadMore();
       },
       { root: null, rootMargin: '200px 0px', threshold: 0 },
     );
     obs.observe(target);
     return () => obs.disconnect();
-  }, [hasMore, loadingMore, onLoadMore, groupedEvents.length]);
+  }, [hasMore, loadingMore, onLoadMore, groupedEvents.length, loadPaused, onSentinelZone]);
 
   if (loading && events.length === 0) return <div className="status-msg">{t('events.loading')}</div>;
   if (events.length === 0) return <div className="event-list"><EmptyRecordings filtered={hasActiveFilter} onClearFilters={onClearFilters} /></div>;
@@ -157,7 +167,7 @@ export function EventList({ events, total: _total, loading, loadingMore, hasMore
       {currentDay && currentDay !== groupedEvents[0]?.label && (
         // Zero-height sticky slot: pins the bar to the viewport top without
         // pushing the list down when the bar appears.
-        <div className="current-day-slot"><div className="current-day-bar">{currentDay}</div></div>
+        <div className="current-day-slot" style={{ top: currentDayTop }}><div className="current-day-bar">{currentDay}</div></div>
       )}
       {editMode && (
         <div className="edit-mode-banner" role="status">

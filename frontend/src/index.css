@@ -3,7 +3,7 @@
   --bg:#06070C;--bg2:#0D0F18;--bg3:#141620;--border:rgba(255,255,255,0.08);
   --text:#E6E9F0;--text2:#8B91A6;--accent:#6EE7B7;--accent2:#818CF8;
   --on-accent:#06070C;
-  --brand-video:#6EE7B7;
+  --brand-video:#6EE7B7;--logo-k:#E4F8ED;--logo-lip:#E6E9F0;
   --danger:#ef4444;--success:#6EE7B7;--radius:8px;
   --error-bg:rgba(239,68,68,0.12);--overlay:rgba(6,7,12,.92);
 }
@@ -11,7 +11,7 @@
   --bg:#f4f5f7;--bg2:#ffffff;--bg3:#e8eaed;--border:#d1d5db;
   --text:#1f2937;--text2:#6b7280;--accent:#2563eb;--accent2:#1d4ed8;
   --on-accent:#ffffff;
-  --brand-video:#047857;
+  --brand-video:#047857;--logo-k:#1F2937;--logo-lip:#1F2937;
   --danger:#dc2626;--success:#16a34a;--radius:8px;
   --error-bg:#fee2e2;--overlay:rgba(0,0,0,.6);
 }
@@ -112,8 +112,11 @@ input:-webkit-autofill:active{
 /* Auth pages */
 .auth-page{display:flex;justify-content:center;align-items:center;min-height:100vh}
 .auth-form{background:var(--bg2);padding:28px;border-radius:12px;width:100%;max-width:360px;display:flex;flex-direction:column;gap:10px;border:1px solid var(--border)}
-.auth-logo{display:block;width:64px;height:64px;margin:0 auto 8px;border-radius:14px}
+/* The logo alone, about 48 px, no icon above it (WEB-SHELL-068). On /login it is the h1. */
+.auth-logo{margin:0 auto 8px}
 .auth-form h1{text-align:center;font-size:1.3rem}
+.auth-form h1.auth-brand{display:flex;justify-content:center;margin-bottom:4px}
+.auth-form h1.auth-brand .auth-logo{margin:0}
 .auth-form .subtitle{text-align:center;color:var(--text2);font-size:.85rem}
 .remember-me{display:flex;align-items:center;gap:6px;font-size:.85rem;color:var(--text2);cursor:pointer;user-select:none}
 .remember-me input[type="checkbox"]{accent-color:var(--accent);width:16px;height:16px;cursor:pointer}
@@ -132,9 +135,12 @@ input:-webkit-autofill:active{
 .app-header{display:flex;align-items:center;justify-content:space-between;padding:8px 16px;background:rgba(13,15,24,0.82);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border-bottom:1px solid var(--border);flex-shrink:0;gap:6px;min-height:0;position:relative;z-index:10}
 [data-theme="light"] .app-header{background:rgba(255,255,255,0.85);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
 .header-brand{display:flex;align-items:center;gap:8px;text-decoration:none;color:inherit;cursor:pointer;min-width:0;flex-shrink:1}
-.header-logo{width:28px;height:28px;border-radius:6px;flex-shrink:0}
-.wordmark-accent{color:var(--brand-video,#6EE7B7)}
-.header-title{font-size:1.05rem;font-weight:700;letter-spacing:-0.3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* The Klipgard logo (WEB-SHELL-068/069): inline outlines, colours from the theme. */
+.klipgard-logo{display:block;flex-shrink:0}
+.klipgard-logo .kl-frame,.klipgard-logo .kl-gard{fill:var(--brand-video,#6EE7B7)}
+.klipgard-logo .kl-k{fill:var(--logo-k,#E4F8ED)}
+.klipgard-logo .kl-lip{fill:var(--logo-lip,#E6E9F0)}
+.header-title{display:flex;align-items:center;font-size:1.05rem;font-weight:700;letter-spacing:-0.3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .header-actions{display:flex;align-items:center;gap:6px}
 @keyframes spin{to{transform:rotate(360deg)}}
 
@@ -257,7 +263,21 @@ input:-webkit-autofill:active{
 /* Day headers */
 .day-header{font-size:.85rem;font-weight:600;color:var(--text2);padding:16px 0 10px;border-bottom:1px solid var(--border);margin-bottom:10px;margin-top:8px;text-transform:capitalize}
 .day-header:first-of-type{margin-top:0}
-.current-day-slot{position:sticky;top:0;height:0;z-index:5}
+.current-day-slot{position:sticky;top:0;height:0;z-index:5;transition:top .2s}
+/* Grid scroll chrome (WEB-GRID-120 … 125). The toolbar sticks to the top and
+   always shows. The bottom bar fades in past it, fixed at the bottom;
+   visibility waits for the fade so a hidden bar takes no focus, and the body
+   keeps its height free so the bar never covers the footer. */
+.grid-toolbar{position:sticky;top:0}
+.grid-toolbar-end{height:0}
+body.grid-scroll-bar-space{padding-bottom:calc(36px + env(safe-area-inset-bottom,0px))}
+.grid-scroll-bar{position:fixed;left:0;right:0;bottom:0;z-index:30;display:flex;align-items:center;justify-content:center;gap:6px;height:36px;padding:0 16px env(safe-area-inset-bottom,0px);box-sizing:content-box;background:rgba(13,15,24,0.82);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border-top:1px solid var(--border);opacity:0;visibility:hidden;pointer-events:none;transition:opacity .2s,visibility 0s linear .2s}
+.grid-scroll-bar.is-visible{opacity:1;visibility:visible;pointer-events:auto;transition:opacity .2s,visibility 0s}
+[data-theme="light"] .grid-scroll-bar{background:var(--bg2);backdrop-filter:none;-webkit-backdrop-filter:none}
+.grid-scroll-btn{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 10px;border:1px solid transparent;border-radius:6px;background:none;color:var(--text2);font:inherit;font-size:.78rem;cursor:pointer}
+.grid-scroll-btn:hover{color:var(--text);border-color:var(--border);background:var(--bg3)}
+.grid-scroll-btn:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+@media (prefers-reduced-motion: reduce){.grid-scroll-bar,.grid-scroll-bar.is-visible,.current-day-slot{transition:none}}
 .current-day-bar{font-size:.8rem;font-weight:600;color:var(--text2);padding:6px 16px;background:var(--bg2);border-bottom:1px solid var(--border);flex-shrink:0;text-transform:capitalize}
 
 /* Event card */
@@ -339,7 +359,7 @@ input:-webkit-autofill:active{
 .video-controls-hidden{opacity:0;pointer-events:none}
 .video-controls-btn{position:relative;display:flex;align-items:center;justify-content:center;width:32px;height:32px;flex-shrink:0;background:transparent;border:none;color:#fff;cursor:pointer;border-radius:6px;opacity:.85;transition:opacity .15s,background .15s}
 .video-controls-btn:hover{opacity:1;background:rgba(255,255,255,.12)}
-.video-controls-spinner{position:absolute;inset:0;margin:auto;width:16px;height:16px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:spin .8s linear infinite}
+.video-controls-spinner{position:absolute;inset:0;margin:auto;pointer-events:none}
 .video-controls-time{flex-shrink:0;font-size:.78rem;white-space:nowrap;opacity:.9}
 .video-controls-seek{position:relative;flex:1;min-width:60px;height:16px;display:flex;align-items:center;cursor:pointer;touch-action:none}
 .video-controls-seek:focus-visible{outline:2px solid var(--success);outline-offset:2px;border-radius:3px}
@@ -408,7 +428,6 @@ input:-webkit-autofill:active{
 .checkbox-label{display:flex;align-items:center;gap:3px;font-size:.85rem;cursor:pointer}
 
 /* Spinner */
-.spinner{width:28px;height:28px;border:3px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite}
 
 /* ====== Timeline view ====== */
 .timeline-container{display:flex;flex-direction:column;padding:0 16px 0;flex:1;min-height:0;overflow:hidden}
@@ -435,8 +454,6 @@ input:-webkit-autofill:active{
  * existing) timeline DOM nodes; new call sites should use the short name. */
 .video-buffer-overlay,
 .timeline-inline-video-buffer-overlay{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:rgba(0,0,0,.45);pointer-events:none;animation:fade-in .15s ease-out;color:#fff;font-size:.95rem;font-weight:500;letter-spacing:.02em;text-shadow:0 1px 2px rgba(0,0,0,.7);z-index:5}
-.video-buffer-overlay .spinner,
-.timeline-inline-video-buffer-overlay .spinner{width:44px;height:44px;border-width:4px}
 /* Blurred thumbnail layer: sits between the <video> (z-index:1) and the
  * buffer overlay (z-index:5). Solid black by default — when the thumbnail
  * blob arrives the <img> covers it. `transform:scale(1.1)` hides the white
@@ -861,8 +878,6 @@ input[type="number"]:focus{border-color:var(--accent)}
 .processing-status-label{flex:1}
 .processing-status-chevron{display:inline-block;font-size:1rem;color:var(--text2);transition:transform .15s ease}
 .processing-status-chevron.is-open{transform:rotate(180deg)}
-.processing-status-spinner{display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--accent);animation:processing-pulse 1.2s ease-in-out infinite}
-@keyframes processing-pulse{0%,100%{opacity:.3}50%{opacity:1}}
 .account-locked-banner{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;margin:8px 16px;padding:10px 14px;background:var(--bg2);border:1px solid var(--usage-yellow);border-left-width:4px;border-radius:var(--radius);font-size:.9rem;color:var(--text)}
 .processing-status-files{list-style:none;margin:6px 0 0;padding:6px;background:var(--bg3);border-radius:var(--radius);max-height:200px;overflow-y:auto;display:flex;flex-direction:column;gap:2px}
 .processing-status-file{font-family:monospace;font-size:.8rem;color:var(--text);padding:2px 4px;word-break:break-all}
@@ -1270,7 +1285,10 @@ html:has(.public-layout) .cookie-banner{
 @media(max-width:720px){
   .header-switch{position:static;transform:none;margin-left:8px;margin-right:auto}
   .header-switch-item{padding:6px 10px;gap:6px;font-size:.78rem}
-  .header-title{display:none}
+  /* The mark alone (WEB-SHELL-015): the svg keeps its height and slices to the
+     frame width (171.79 / 167.89 of the height), so "lipgard" falls outside. */
+  .header-title .klipgard-logo{width:calc(28px * 1.0232)}
+  .header-title .klipgard-logo .kl-lip,.header-title .klipgard-logo .kl-gard{display:none}
 }
 @media(max-width:380px){
   .header-switch-item:not(.active) span{display:none}

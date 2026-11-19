@@ -14,12 +14,17 @@ vi.mock('../edition', () => ({ edition: { get operatorHome() { return operator.h
 vi.mock('./NotificationsBell', () => ({ NotificationsBell: () => null }));
 vi.mock('../hooks/usePwaInstall', () => ({ usePwaInstall: () => ({ canPromptInstall: false, install: vi.fn() }) }));
 
-describe('Header wordmark', () => {
-  it('[WEB-SHELL-068] draws "gard" in the brand colour and keeps the accessible name', () => {
-    render(<I18nProvider><MemoryRouter><Header /></MemoryRouter></I18nProvider>);
+describe('Header logo', () => {
+  it('[WEB-SHELL-015] [WEB-SHELL-068] draws the logo, 28 px tall, as the linked title, with no app icon next to it', () => {
+    const { container } = render(<I18nProvider><MemoryRouter><Header /></MemoryRouter></I18nProvider>);
     const title = screen.getByRole('heading', { level: 1, name: 'Klipgard' });
-    const tinted = title.querySelector('.wordmark-accent');
-    expect(tinted?.textContent).toBe('gard');
+    const logo = title.querySelector('svg.klipgard-logo');
+    expect(logo).not.toBeNull();
+    expect(logo).toHaveAttribute('height', '28');
+    expect(screen.getByRole('img', { name: 'Klipgard' })).toBe(logo);
+    expect(title.closest('a')).toHaveAttribute('href', '/grid');
+    // The logo already holds the K: no icon image anywhere in the header.
+    expect(container.querySelector('header img')).toBeNull();
   });
 });
 

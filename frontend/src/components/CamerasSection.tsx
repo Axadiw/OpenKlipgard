@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
 import { useTranslation } from '../i18n';
+import { KlipgardLoader } from './KlipgardLoader';
 
 interface CameraRow {
   camera: string;
@@ -31,7 +32,7 @@ export function CamerasSection({ onPickCamera }: Props) {
   }, []);
 
   if (error) return <div className="settings-error">{error}</div>;
-  if (!rows) return <div className="spinner" />;
+  if (!rows) return <KlipgardLoader />;
   if (rows.length === 0) return <div className="settings-empty">{t('settings.camerasEmpty')}</div>;
 
   const clickable = !!onPickCamera;
