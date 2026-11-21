@@ -30,7 +30,7 @@ use unftp_core::storage::{Error, ErrorKind, Fileinfo, StorageBackend};
 
 use crate::api::InternalApi;
 use crate::metadata::ObjectMetadata;
-use crate::s3::{Probe, S3};
+use crate::s3::{Probe, StoreFailure, S3};
 use crate::streams::StreamsPublisher;
 use crate::user::KlipgardUser;
 
@@ -136,6 +136,42 @@ struct CommitCtx {
     filename: String,
     /// FTP-visible path, for log lines and user-facing notification details.
     display_path: String,
+}
+
+/// Why a streaming upload failed, in the form `put` and `salvage_upload` need.
+///
+/// The failure crosses a task boundary as text, so what `put` still needs to
+/// know about its class is kept next to the text.
+struct UploadFailure {
+    /// The text for the log, and for the line that libunftp logs for the reply.
+    message: String,
+    /// The store answered with the status of a full store ([FTPS-168]).
+    store_full: bool,
+}
+
+impl UploadFailure {
+    fn from_boxed(err: Box<dyn std::error::Error + Send + Sync>) -> Self {
+        let store_full = err
+            .downcast_ref::<StoreFailure>()
+            .is_some_and(StoreFailure::is_full);
+        Self {
+            message: err.to_string(),
+            store_full,
+        }
+    }
+
+    /// The error that libunftp turns into the reply of the STOR. A full store
+    /// gets 452 `Insufficient storage space`, so the client can tell it from a
+    /// fault of the server. Every other failure keeps 451 `Local error`
+    /// ([FTPS-168]).
+    fn into_ftp_error(self) -> Error {
+        let kind = if self.store_full {
+            ErrorKind::InsufficientStorageSpaceError
+        } else {
+            ErrorKind::LocalError
+        };
+        Error::new(kind, self.message)
+    }
 }
 
 /// Notification for an upload the API refused with 507 ([FTPS-074]).
@@ -273,7 +309,7 @@ async fn commit_upload(
 /// log. The bytes we did receive are already a valid (shorter) MP4, and the
 /// sidecar builder trims a truncated file to its last complete sample, so
 /// committing them turns "recording lost" into "recording shorter".
-async fn salvage_upload(ctx: CommitCtx, ext: &'static str, streamed: Result<i64, String>) {
+async fn salvage_upload(ctx: CommitCtx, ext: &'static str, streamed: Result<i64, UploadFailure>) {
     warn!(
         user_uuid = %ctx.user_uuid,
         path = ?ctx.display_path,
@@ -297,7 +333,7 @@ async fn salvage_upload(ctx: CommitCtx, ext: &'static str, streamed: Result<i64,
             debug!(key = %ctx.key, "Cancelled upload had no bytes — nothing to salvage");
         }
         Err(e) => {
-            error!(error = %e, key = %ctx.key, "Cancelled upload also failed to stream to S3");
+            error!(error = %e.message, key = %ctx.key, "Cancelled upload also failed to stream to S3");
         }
     }
 }
@@ -1149,7 +1185,7 @@ impl StorageBackend<KlipgardUser> for KlipgardStorage {
             let streamed = s3
                 .put_object_stream(&stream_key, &magic_owned, &mut source, &salt, upload_cap)
                 .await
-                .map_err(|e| e.to_string());
+                .map_err(UploadFailure::from_boxed);
             if let Err(streamed) = tx.send(streamed) {
                 salvage_upload(ctx, ext, streamed).await;
             }
@@ -1165,9 +1201,14 @@ impl StorageBackend<KlipgardUser> for KlipgardStorage {
 
         let size = match streamed {
             Ok(s) => s,
-            Err(msg) => {
-                error!(error = %msg, key = %key, "S3 streaming upload failed");
-                if msg.starts_with("Upload exceeds") {
+            Err(failure) => {
+                error!(
+                    error = %failure.message,
+                    key = %key,
+                    store_full = failure.store_full,
+                    "S3 streaming upload failed"
+                );
+                if failure.message.starts_with("Upload exceeds") {
                     // The stream hit its byte cap. If we narrowed the cap to the
                     // user's disk headroom (upload_cap < MAX_UPLOAD_BYTES),
                     // this is a disk-quota rejection — not the 100 GiB per-file
@@ -1215,7 +1256,7 @@ impl StorageBackend<KlipgardUser> for KlipgardStorage {
                         "Upload exceeds per-file size limit",
                     ));
                 }
-                return Err(Error::new(ErrorKind::LocalError, msg));
+                return Err(failure.into_ftp_error());
             }
         };
         if size == 0 {
@@ -1920,5 +1961,48 @@ mod tests {
         )
         .await;
         assert_eq!(store_error, Err("500".to_string()), "a failed delete must surface as the reply");
+    }
+
+    ///story: [FTPS-168] Tylko pełny magazyn (odpowiedź ze statusem 507) kończy upload odpowiedzią 452 `Insufficient storage space`; każdy inny błąd uploadu — inny status magazynu, brak odpowiedzi, przekroczony limit bajtów, błąd odczytu od klienta — zostaje przy 451 `Local error`, tak jak przed tą zmianą.
+    #[test]
+    fn only_a_full_store_gets_the_insufficient_storage_reply() {
+        use super::UploadFailure;
+        use crate::metrics::S3Op;
+        use crate::s3::StoreFailure;
+        use unftp_core::storage::ErrorKind;
+
+        let store = |status: Option<u16>| -> Box<dyn std::error::Error + Send + Sync> {
+            Box::new(StoreFailure {
+                op: S3Op::UploadPart,
+                status,
+                code: None,
+                message: None,
+                cause: None,
+            })
+        };
+        let reply_kind = |err: Box<dyn std::error::Error + Send + Sync>| {
+            UploadFailure::from_boxed(err).into_ftp_error().kind()
+        };
+
+        assert_eq!(
+            reply_kind(store(Some(507))),
+            ErrorKind::InsufficientStorageSpaceError
+        );
+        assert_eq!(reply_kind(store(Some(500))), ErrorKind::LocalError);
+        assert_eq!(reply_kind(store(Some(403))), ErrorKind::LocalError);
+        assert_eq!(
+            reply_kind(store(None)),
+            ErrorKind::LocalError,
+            "no answer is not a full store"
+        );
+        assert_eq!(
+            reply_kind("Upload exceeds 100 byte limit".into()),
+            ErrorKind::LocalError,
+            "an error that is not from the store keeps the old reply",
+        );
+        assert_eq!(
+            reply_kind(Box::new(std::io::Error::other("connection reset"))),
+            ErrorKind::LocalError,
+        );
     }
 }

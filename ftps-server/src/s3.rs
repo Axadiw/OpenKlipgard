@@ -2,8 +2,8 @@ use std::fmt;
 
 use aws_credential_types::Credentials;
 use aws_sdk_s3::{
-    config::{retry::RetryConfig, Builder as S3ConfigBuilder, Region},
-    error::SdkError,
+    config::{http::HttpResponse, retry::RetryConfig, Builder as S3ConfigBuilder, Region},
+    error::{ProvideErrorMetadata, SdkError},
     operation::head_object::HeadObjectError,
     primitives::ByteStream,
     types::{CompletedMultipartUpload, CompletedPart},
@@ -28,6 +28,127 @@ use crate::metrics::{global, timed, timed_where, timed_within_on, S3Op};
 /// "recordings are being lost", which is exactly what its alert claims.
 fn head_object_failed(err: &SdkError<HeadObjectError>) -> bool {
     !matches!(err, SdkError::ServiceError(e) if e.err().is_not_found())
+}
+
+/// The HTTP status that S3-compatible stores answer when they have no space
+/// left: 507 Insufficient Storage ([FTPS-168]).
+///
+/// WHY the status and not an error code: MinIO answers `XMinioStorageFull`, the
+/// AWS capacity errors (S3 on Outposts, FSx behind an S3 access point) answer
+/// `InsufficientCapacity`, and both use 507. A list of codes would grow with
+/// every store, and the status still arrives when the body is not S3 XML (a
+/// proxy in front of the store). Backblaze B2 reportedly answers a reached
+/// storage cap with 403, which a revoked key shares, so it is deliberately not
+/// matched. Its message still reaches the log.
+const STORE_FULL_STATUS: u16 = 507;
+
+/// What the object store said about one failed call of an upload.
+///
+/// WHY it exists: the `Display` of an SDK service error is the two words
+/// `service error`. The S3 code and message sit in the error metadata and the
+/// status sits in the raw response, and nothing read them, so a store with a
+/// full disk looked like any other fault and the cause had to be found in the
+/// store's own log. `Display` here is the log text ([FTPS-166]): status, code
+/// and message of the answer, or the cause when there was no answer. It holds
+/// nothing else, so it cannot show a credential, an SSE-C key or a request
+/// header ([FTPS-167]).
+#[derive(Debug)]
+pub struct StoreFailure {
+    pub op: S3Op,
+    /// HTTP status of the answer. `None` when the store gave no answer.
+    pub status: Option<u16>,
+    /// S3 error code from the answer.
+    pub code: Option<String>,
+    /// S3 error message from the answer.
+    pub message: Option<String>,
+    /// The SDK error and its sources, only when the answer is not an S3 error
+    /// response: refused connection, TLS trust error, timeout, unreadable reply.
+    pub cause: Option<String>,
+}
+
+impl StoreFailure {
+    pub fn from_sdk<E>(op: S3Op, err: &SdkError<E, HttpResponse>) -> Self
+    where
+        E: std::error::Error + ProvideErrorMetadata + 'static,
+    {
+        let cause = match err {
+            SdkError::ServiceError(_) => None,
+            other => Some(error_chain(other)),
+        };
+        Self {
+            op,
+            status: err
+                .raw_response()
+                .map(|response| response.status().as_u16()),
+            code: err.code().map(str::to_owned),
+            message: err.message().map(str::to_owned),
+            cause,
+        }
+    }
+
+    /// Did the store answer that it has no space left ([FTPS-168])?
+    pub fn is_full(&self) -> bool {
+        self.status == Some(STORE_FULL_STATUS)
+    }
+}
+
+impl fmt::Display for StoreFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "S3 {} failed", self.op.as_str())?;
+        let mut separator = ": ";
+        if let Some(status) = self.status {
+            write!(f, "{separator}HTTP status {status}")?;
+            separator = ", ";
+        }
+        if let Some(code) = &self.code {
+            write!(f, "{separator}S3 code {code}")?;
+            separator = ", ";
+        }
+        if let Some(message) = &self.message {
+            // Debug quotes the text and escapes control characters, so a message
+            // from the store cannot break the log line in two.
+            write!(f, "{separator}message {message:?}")?;
+            separator = ", ";
+        }
+        if let Some(cause) = &self.cause {
+            write!(f, "{separator}cause {cause}")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for StoreFailure {}
+
+/// `err` and every error under it, joined by `: `.
+///
+/// This is what the SDK's own `DisplayErrorContext` prints, minus the `Debug`
+/// dump of the whole error that it appends: that dump holds the raw response and
+/// is not a line for a log.
+fn error_chain(err: &(dyn std::error::Error + 'static)) -> String {
+    let mut text = err.to_string();
+    let mut source = err.source();
+    while let Some(inner) = source {
+        text.push_str(": ");
+        text.push_str(&inner.to_string());
+        source = inner.source();
+    }
+    text
+}
+
+/// Log a failed call of an upload once, after its last attempt, and turn it
+/// into the error that `put_object_stream` returns ([FTPS-166]).
+fn failed_store_call<E>(
+    op: S3Op,
+    key: &str,
+    layer: &'static str,
+    err: SdkError<E, HttpResponse>,
+) -> Box<dyn std::error::Error + Send + Sync>
+where
+    E: std::error::Error + ProvideErrorMetadata + 'static,
+{
+    let failure = StoreFailure::from_sdk(op, &err);
+    error!(error = %failure, key = %key, layer = layer, "layer error");
+    Box::new(failure)
 }
 
 /// Multipart part size, pinned to the S3 minimum for non-final parts.
@@ -332,8 +453,7 @@ impl S3 {
                     )
                     .await
                     {
-                        error!(error = %e, key = %key, layer = "s3_single_put_eof", "layer error");
-                        return Err(Box::new(e));
+                        return Err(failed_store_call(S3Op::Put, key, "s3_single_put_eof", e));
                     }
                     return Ok(total);
                 }
@@ -368,8 +488,12 @@ impl S3 {
                     )
                     .await
                     {
-                        error!(error = %e, key = %key, layer = "s3_single_put_unexpectedeof", "layer error");
-                        return Err(Box::new(e));
+                        return Err(failed_store_call(
+                            S3Op::Put,
+                            key,
+                            "s3_single_put_unexpectedeof",
+                            e,
+                        ));
                     }
                     return Ok(total);
                 }
@@ -404,8 +528,12 @@ impl S3 {
         {
             Ok(v) => v,
             Err(e) => {
-                error!(error = %e, key = %key, layer = "s3_create_multipart", "layer error");
-                return Err(Box::new(e));
+                return Err(failed_store_call(
+                    S3Op::CreateMultipart,
+                    key,
+                    "s3_create_multipart",
+                    e,
+                ));
             }
         };
         let upload_id = mpu.upload_id().unwrap_or_default().to_string();
@@ -633,8 +761,12 @@ impl S3 {
                     );
                 }
                 _ => {
-                    error!(error = %e, key = %key, layer = "s3_complete_multipart", "layer error");
-                    return Err(Box::new(e));
+                    return Err(failed_store_call(
+                        S3Op::CompleteMultipart,
+                        key,
+                        "s3_complete_multipart",
+                        e,
+                    ));
                 }
             }
         }
@@ -980,7 +1112,10 @@ async fn queue_part(
                 .sse_customer_key_md5(key_md5)
                 .send(),
         )
-        .await?;
+        .await
+        // The failure is named here, where the SDK error is still typed. The join
+        // loop in `put_object_stream` logs it once ([FTPS-166]).
+        .map_err(|e| StoreFailure::from_sdk(S3Op::UploadPart, &e))?;
         Ok(CompletedPart::builder()
             .part_number(part_number)
             .set_e_tag(resp.e_tag.clone())
@@ -1091,12 +1226,16 @@ mod tests {
 </ListBucketResult>"#;
 
     fn s3_against(uri: String) -> S3 {
+        s3_with_credentials(uri, "ak", "sk")
+    }
+
+    fn s3_with_credentials(uri: String, access_key: &str, secret_key: &str) -> S3 {
         let conf = S3ConfigBuilder::new()
             .behavior_version_latest()
             .region(Region::new("us-east-1"))
             .endpoint_url(uri)
             .force_path_style(true)
-            .credentials_provider(Credentials::new("ak", "sk", None, None, "test"))
+            .credentials_provider(Credentials::new(access_key, secret_key, None, None, "test"))
             .retry_config(RetryConfig::disabled())
             // `default-features = false` on aws-sdk-s3 means there is no
             // implicit HTTP client — the same pinned rustls connector
@@ -1455,5 +1594,414 @@ mod tests {
             timeouts_before + 1,
             "an unanswered probe must be counted, or this outage is invisible again",
         );
+    }
+
+    // --- A failed upload call says why ([FTPS-166], [FTPS-167], [FTPS-168]) ----
+    //
+    // These run `put_object_stream` against a mock object store, so they reach
+    // the real call sites: the single PUT, CreateMultipartUpload, UploadPart and
+    // CompleteMultipartUpload.
+
+    use wiremock::{Mock, MockServer, Request, ResponseTemplate};
+
+    const UPLOAD_SALT: &str = "c2FsdHNhbHRzYWx0";
+
+    /// What a store under its free-space threshold answers to a write.
+    const STORE_FULL_XML: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<Error><Code>XMinioStorageFull</Code><Message>Storage backend has reached its minimum free drive threshold. Please delete a few objects to proceed.</Message><Key>a.mp4</Key><BucketName>b</BucketName><Resource>/b/a.mp4</Resource><RequestId>17A8B8E6C8D0B4A1</RequestId><HostId>dd9025bab4ad464b</HostId></Error>"#;
+    const STORE_FULL_MESSAGE: &str = "Storage backend has reached its minimum free drive threshold. Please delete a few objects to proceed.";
+
+    fn store_full_answer() -> ResponseTemplate {
+        ResponseTemplate::new(507).set_body_raw(STORE_FULL_XML, "application/xml")
+    }
+
+    /// The four store calls an upload can fail at.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum UploadCall {
+        Put,
+        CreateMultipart,
+        UploadPart,
+        CompleteMultipart,
+    }
+
+    impl UploadCall {
+        const ALL: [UploadCall; 4] = [
+            UploadCall::Put,
+            UploadCall::CreateMultipart,
+            UploadCall::UploadPart,
+            UploadCall::CompleteMultipart,
+        ];
+
+        /// Bytes that reach that call: below the part size for one PUT, one byte
+        /// above it for a multipart upload with two parts.
+        fn upload_len(self) -> u64 {
+            match self {
+                UploadCall::Put => 3,
+                _ => MULTIPART_CHUNK as u64 + 1,
+            }
+        }
+
+        /// Does this request make that call?
+        fn is_call(self) -> fn(&Request) -> bool {
+            match self {
+                UploadCall::Put => is_put_object,
+                UploadCall::CreateMultipart => is_create_multipart,
+                UploadCall::UploadPart => is_upload_part,
+                UploadCall::CompleteMultipart => is_complete_multipart,
+            }
+        }
+
+        /// What a working store answers to that call.
+        fn working_answer(self) -> ResponseTemplate {
+            match self {
+                UploadCall::Put => ResponseTemplate::new(200),
+                UploadCall::CreateMultipart => ResponseTemplate::new(200).set_body_raw(
+                    "<InitiateMultipartUploadResult><Bucket>b</Bucket><Key>u/a.mp4</Key><UploadId>UP1</UploadId></InitiateMultipartUploadResult>",
+                    "application/xml",
+                ),
+                UploadCall::UploadPart => ResponseTemplate::new(200).insert_header("ETag", "\"e1\""),
+                UploadCall::CompleteMultipart => ResponseTemplate::new(200).set_body_raw(
+                    "<CompleteMultipartUploadResult><Location>x</Location><Bucket>b</Bucket><Key>u/a.mp4</Key><ETag>\"e\"</ETag></CompleteMultipartUploadResult>",
+                    "application/xml",
+                ),
+            }
+        }
+    }
+
+    fn query_has(req: &Request, key: &str, value: Option<&str>) -> bool {
+        req.url.query_pairs().any(|(k, v)| {
+            k == key
+                && match value {
+                    Some(want) => v == want,
+                    None => true,
+                }
+        })
+    }
+
+    fn is_put_object(req: &Request) -> bool {
+        req.method.as_str() == "PUT" && query_has(req, "x-id", Some("PutObject"))
+    }
+
+    fn is_create_multipart(req: &Request) -> bool {
+        req.method.as_str() == "POST" && query_has(req, "uploads", None)
+    }
+
+    fn is_upload_part(req: &Request) -> bool {
+        req.method.as_str() == "PUT" && query_has(req, "x-id", Some("UploadPart"))
+    }
+
+    fn is_complete_multipart(req: &Request) -> bool {
+        req.method.as_str() == "POST" && query_has(req, "uploadId", None)
+    }
+
+    fn is_abort_multipart(req: &Request) -> bool {
+        req.method.as_str() == "DELETE" && query_has(req, "uploadId", None)
+    }
+
+    /// A store that answers every call of an upload correctly, except `failing`:
+    /// that call gets `answer`.
+    async fn store_failing_at(failing: UploadCall, answer: ResponseTemplate) -> MockServer {
+        let server = MockServer::start().await;
+        for call in UploadCall::ALL {
+            let response = if call == failing {
+                answer.clone()
+            } else {
+                call.working_answer()
+            };
+            Mock::given(call.is_call())
+                .respond_with(response)
+                .mount(&server)
+                .await;
+        }
+        Mock::given(is_abort_multipart)
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+        server
+    }
+
+    /// An address on this machine that nothing listens on.
+    fn closed_port_uri() -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a free port");
+        let port = listener.local_addr().expect("local address").port();
+        drop(listener);
+        format!("http://127.0.0.1:{port}")
+    }
+
+    async fn upload_of(
+        s3: &S3,
+        key: &str,
+        call: UploadCall,
+    ) -> Result<i64, Box<dyn std::error::Error + Send + Sync>> {
+        let mut reader = tokio::io::repeat(b'x').take(call.upload_len());
+        s3.put_object_stream(key, &[], &mut reader, UPLOAD_SALT, i64::MAX)
+            .await
+    }
+
+    async fn failed_upload(
+        server: &MockServer,
+        call: UploadCall,
+    ) -> Box<dyn std::error::Error + Send + Sync> {
+        upload_of(&s3_against(server.uri()), "u/a.mp4", call)
+            .await
+            .expect_err("the store refuses this call, so the upload must fail")
+    }
+
+    ///story: [FTPS-166] Gdy magazyn obiektów odpowiada błędem na wywołanie uploadu (PutObject, CreateMultipartUpload, UploadPart albo CompleteMultipartUpload), błąd wychodzący z `put_object_stream` musi nazywać tę odpowiedź: status HTTP, kod i komunikat S3. Goły `service error` kazał szukać przyczyny w logu MinIO i w `df`.
+    #[tokio::test]
+    async fn a_failed_upload_call_names_the_answer_of_the_store() {
+        for call in UploadCall::ALL {
+            let server = store_failing_at(call, store_full_answer()).await;
+
+            let text = failed_upload(&server, call).await.to_string();
+
+            for fact in ["507", "XMinioStorageFull", STORE_FULL_MESSAGE] {
+                assert!(
+                    text.contains(fact),
+                    "{call:?}: the failure reads {text:?}, which does not hold {fact:?}",
+                );
+            }
+        }
+    }
+
+    ///story: [FTPS-166] Gdy magazyn nie odpowiada wcale (odmowa połączenia, zły certyfikat, timeout), nie ma ani statusu, ani kodu — błąd ma wtedy nazwać przyczynę, którą zgłasza SDK, a nie sam `dispatch failure`.
+    #[tokio::test]
+    async fn an_upload_that_gets_no_answer_names_the_cause_from_the_sdk() {
+        let err = upload_of(&s3_against(closed_port_uri()), "u/a.mp4", UploadCall::Put)
+            .await
+            .expect_err("nothing listens there, so the upload must fail");
+
+        let text = err.to_string().to_lowercase();
+
+        assert!(
+            text.contains("refused"),
+            "the failure reads {text:?}, which does not say why the connection failed",
+        );
+    }
+
+    struct CaptureWriter(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for CaptureWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// What `tracing` wrote in this test binary at the level a default install
+    /// logs (`RUST_LOG=info`).
+    ///
+    /// The subscriber is process-wide on purpose. Tests run in parallel, and
+    /// `tracing` caches per call site whether it is enabled: a subscriber that
+    /// belongs to one test thread lost events that another test thread had
+    /// evaluated first. A test picks its own lines out by a key that only it uses.
+    fn log_text() -> String {
+        static BUFFER: std::sync::OnceLock<std::sync::Arc<std::sync::Mutex<Vec<u8>>>> =
+            std::sync::OnceLock::new();
+        let buffer = BUFFER.get_or_init(|| {
+            let buffer = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let writer = buffer.clone();
+            let subscriber = tracing_subscriber::fmt()
+                .with_writer(move || CaptureWriter(writer.clone()))
+                .with_ansi(false)
+                .with_max_level(tracing::Level::INFO)
+                .finish();
+            tracing::subscriber::set_global_default(subscriber)
+                .expect("no other test installs a global tracing subscriber");
+            buffer
+        });
+        String::from_utf8_lossy(&buffer.lock().unwrap()).into_owned()
+    }
+
+    ///story: [FTPS-166] [FTPS-167] To, co serwer naprawdę zapisuje w logu po nieudanym uploadzie, nazywa przyczynę (kod, status i komunikat magazynu, a gdy magazyn milczy — przyczynę z SDK), pojawia się raz na nieudany upload i nie zawiera ani danych dostępowych do magazynu, ani klucza SSE-C, ani nagłówków żądania.
+    #[tokio::test]
+    async fn the_log_of_a_failed_upload_names_the_cause_and_holds_no_secret() {
+        const ACCESS_KEY: &str = "AKIAFTPSLOGTESTKEY1";
+        const SECRET_KEY: &str = "fTpSlOgTeStSeCrEtKeY0123456789";
+        const ANSWERED_KEY: &str = "u/ftps166-log-answered.mp4";
+        const SILENT_KEY: &str = "u/ftps166-log-silent.mp4";
+
+        log_text(); // installs the subscriber before the first event
+        let full = store_failing_at(UploadCall::UploadPart, store_full_answer()).await;
+        let answering = s3_with_credentials(full.uri(), ACCESS_KEY, SECRET_KEY);
+        let silent = s3_with_credentials(closed_port_uri(), ACCESS_KEY, SECRET_KEY);
+
+        let _ = upload_of(&answering, ANSWERED_KEY, UploadCall::UploadPart).await;
+        let _ = upload_of(&silent, SILENT_KEY, UploadCall::Put).await;
+
+        let text = log_text();
+        let errors_for = |key: &str| -> Vec<&str> {
+            text.lines()
+                .filter(|line| line.contains(" ERROR ") && line.contains(key))
+                .collect()
+        };
+        let answered = errors_for(ANSWERED_KEY);
+        assert_eq!(
+            answered.len(),
+            1,
+            "one error line for one failed upload:\n{answered:#?}"
+        );
+        for fact in ["507", "XMinioStorageFull", STORE_FULL_MESSAGE] {
+            assert!(
+                answered[0].contains(fact),
+                "the line lacks {fact:?}: {}",
+                answered[0]
+            );
+        }
+        let silent_lines = errors_for(SILENT_KEY);
+        assert_eq!(
+            silent_lines.len(),
+            1,
+            "one error line for one failed upload:\n{silent_lines:#?}"
+        );
+        assert!(
+            silent_lines[0].to_lowercase().contains("refused"),
+            "the line does not say why the silent store failed: {}",
+            silent_lines[0],
+        );
+        let (_, sse_key, sse_key_md5) = answering.get_ssec(UPLOAD_SALT);
+        for secret in [
+            ACCESS_KEY,
+            SECRET_KEY,
+            sse_key.as_str(),
+            sse_key_md5.as_str(),
+            "x-amz-server-side-encryption-customer-key",
+            "AWS4-HMAC-SHA256",
+        ] {
+            assert!(!text.contains(secret), "the log shows {secret:?}");
+        }
+    }
+
+    ///story: [FTPS-168] [FTPS-150] Pełny magazyn jest obsługiwany jak każdy inny błąd magazynu: nieudana część przerywa upload wieloczęściowy (AbortMultipartUpload), więc magazyn nie trzyma porzuconych części.
+    #[tokio::test]
+    async fn a_failed_part_aborts_the_multipart_upload() {
+        let server = store_failing_at(UploadCall::UploadPart, store_full_answer()).await;
+
+        failed_upload(&server, UploadCall::UploadPart).await;
+
+        // The abort runs in a detached task. Wait for it instead of sleeping a fixed time.
+        let aborted = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let requests = server.received_requests().await.expect("recorded requests");
+                if requests.iter().any(is_abort_multipart) {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        assert!(aborted.is_ok(), "no AbortMultipartUpload reached the store");
+    }
+
+    fn as_store_failure<'a>(
+        err: &'a (dyn std::error::Error + Send + Sync + 'static),
+    ) -> &'a StoreFailure {
+        err.downcast_ref::<StoreFailure>()
+            .unwrap_or_else(|| panic!("the failure of the upload is not a StoreFailure: {err:?}"))
+    }
+
+    ///story: [FTPS-168] Pełny magazyn musi być rozpoznany na KAŻDYM wywołaniu uploadu, nie tylko na jednym: pojedynczy PUT, CreateMultipartUpload, UploadPart i CompleteMultipartUpload zwracają błąd z nazwą wywołania, statusem 507, kodem i komunikatem magazynu.
+    #[tokio::test]
+    async fn a_full_store_is_recognised_at_every_upload_call() {
+        let cases = [
+            (UploadCall::Put, S3Op::Put),
+            (UploadCall::CreateMultipart, S3Op::CreateMultipart),
+            (UploadCall::UploadPart, S3Op::UploadPart),
+            (UploadCall::CompleteMultipart, S3Op::CompleteMultipart),
+        ];
+        for (call, op) in cases {
+            let server = store_failing_at(call, store_full_answer()).await;
+
+            let err = failed_upload(&server, call).await;
+
+            let failure = as_store_failure(&*err);
+            assert_eq!(failure.op, op, "{call:?}");
+            assert_eq!(failure.status, Some(507), "{call:?}");
+            assert_eq!(
+                failure.code.as_deref(),
+                Some("XMinioStorageFull"),
+                "{call:?}"
+            );
+            assert_eq!(
+                failure.message.as_deref(),
+                Some(STORE_FULL_MESSAGE),
+                "{call:?}"
+            );
+            assert!(failure.is_full(), "{call:?}");
+        }
+    }
+
+    ///story: [FTPS-168] [FTPS-166] Za pełny magazyn uchodzi WYŁĄCZNIE odpowiedź ze statusem HTTP 507 — także gdy ciało nie jest XML-em S3 (proxy przed magazynem). Każdy inny błąd (403 Backblaze B2 przy osiągniętym limicie, 500, 503, 404) zostaje zwykłym błędem magazynu z odpowiedzią 451 jak dotąd, a jego log nadal pokazuje to, co magazyn powiedział.
+    #[tokio::test]
+    async fn only_status_507_is_a_full_store() {
+        let s3_error = |status: u16, code: &str, message: &str| {
+            ResponseTemplate::new(status).set_body_raw(
+                format!("<Error><Code>{code}</Code><Message>{message}</Message></Error>"),
+                "application/xml",
+            )
+        };
+        // (what the store answers, is it a full store, text that the failure must show)
+        let cases: [(&str, ResponseTemplate, bool, &str); 7] = [
+            ("store full", store_full_answer(), true, "XMinioStorageFull"),
+            (
+                "507 without a body",
+                ResponseTemplate::new(507),
+                true,
+                "HTTP status 507",
+            ),
+            (
+                "507 from a proxy in front of the store",
+                ResponseTemplate::new(507).set_body_raw(
+                    "<html><body>507 Insufficient Storage</body></html>",
+                    "text/html",
+                ),
+                true,
+                "HTTP status 507",
+            ),
+            (
+                "storage cap of the store reached, 403",
+                s3_error(
+                    403,
+                    "AccessDenied",
+                    "Cannot upload files, storage cap exceeded.",
+                ),
+                false,
+                "Cannot upload files, storage cap exceeded.",
+            ),
+            (
+                "internal error, 500",
+                s3_error(500, "InternalError", "We encountered an internal error."),
+                false,
+                "InternalError",
+            ),
+            (
+                "slow down, 503",
+                s3_error(503, "SlowDown", "Please reduce your request rate."),
+                false,
+                "SlowDown",
+            ),
+            (
+                "no such bucket, 404",
+                s3_error(404, "NoSuchBucket", "The specified bucket does not exist."),
+                false,
+                "NoSuchBucket",
+            ),
+        ];
+        for (label, answer, full, shown) in cases {
+            let server = store_failing_at(UploadCall::Put, answer).await;
+
+            let err = failed_upload(&server, UploadCall::Put).await;
+
+            assert_eq!(as_store_failure(&*err).is_full(), full, "{label}");
+            assert!(
+                err.to_string().contains(shown),
+                "{label}: the failure reads {:?}, which does not show {shown:?}",
+                err.to_string(),
+            );
+        }
     }
 }
