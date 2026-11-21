@@ -478,6 +478,11 @@ not move any recordings.
   ports 21 and 30000–30099 through the computer's firewall, and keep the
   computer on. Keep the recordings in the default volume: `RECORDINGS_DIR` on
   the host file system is slow there.
+- **Docker Desktop: uploads end in `451` or `452`.** The storage disk is
+  full. Docker Desktop keeps all containers in one virtual disk of a fixed
+  size. Free space on it, or make it larger under Settings → Resources.
+  `docker compose logs minio` shows the cause:
+  `Storage reached its minimum free drive threshold`.
 - **NAS.** You need Docker with Compose v2.20 or newer on the NAS. Some NAS
   systems use port 8080 for their own admin page (set `WEB_PORT`) or run their
   own FTP server on port 21 (turn it off, or set `FTP_PORT` and use that port
