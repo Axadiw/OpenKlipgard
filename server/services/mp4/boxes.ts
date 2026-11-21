@@ -9,6 +9,22 @@ export interface BoxHeader {
   headerSize: number;
 }
 
+/**
+ * Hard ceiling on any single object-store range read that a box header from
+ * the file sizes ([WORKER-123]). A real camera moof is a few KiB; 32 MiB is
+ * thousands of times that. A crafted header declaring a larger box makes the
+ * caller throw, which it treats as an unprocessable file.
+ */
+export const MAX_BOX_READ_BYTES = 32 * 1024 * 1024;
+
+export function assertBoxReadWithinCeiling(declaredSize: number, what: string): void {
+  if (!Number.isFinite(declaredSize) || declaredSize > MAX_BOX_READ_BYTES) {
+    throw new Error(
+      `${what}: declared box size ${declaredSize} exceeds MAX_BOX_READ_BYTES (${MAX_BOX_READ_BYTES}) — refusing to read a likely corrupt/hostile file`,
+    );
+  }
+}
+
 export interface FullBoxVersion {
   version: number;
   flags: number;

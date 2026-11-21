@@ -199,8 +199,12 @@ export function _createRateLimitForTesting(opts: RateLimitOptions) {
   return buildMiddleware(() => limiter, opts.keyPrefix, opts.windowMs, opts.keyExtractor);
 }
 
-// Login: strict limit (brute-force protection)
-export const loginRateLimit = createRateLimit({ keyPrefix: 'login', maxRequests: 10, windowMs: 15 * 60 * 1000 });
+// Login: IP-based backstop. The per-email limiter (20/h) and the per-account
+// exponential lockout (recordFailedLogin) carry the brute-force load, so
+// the per-IP cap is generous enough that a 10-person office behind one NAT
+// can each mistype a few times without locking every colleague out. The
+// window is short (5 min) so a blocked IP recovers quickly.
+export const loginRateLimit = createRateLimit({ keyPrefix: 'login', maxRequests: 30, windowMs: 5 * 60 * 1000 });
 
 // Refresh: separate budget so login flak from the same NAT/CGNAT does NOT
 // knock out a healthy session's silent token refresh. Refresh requires

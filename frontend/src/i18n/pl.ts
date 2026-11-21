@@ -201,7 +201,7 @@ export const pl: Record<string, string> = {
   'notifications.msg.invalidFile': 'Przesłanie zostało odrzucone, ponieważ plik nie był prawidłowym nagraniem.',
   'notifications.msg.invalidFileTooLarge': 'Przesłanie zostało odrzucone, ponieważ plik przekracza limit rozmiaru 100 GiB. Podziel nagranie lub skontaktuj się z pomocą.',
   'notifications.msg.invalidFileViewCollapsed': 'Jednej strony „{filename}” nie udało się przetworzyć; druga jest w porządku.',
-  'notifications.msg.duplicateFile': 'Zduplikowane przesłanie z {camera}',
+  'notifications.msg.duplicateFile': 'Zduplikowane przesłanie z kamery {camera}',
   'notifications.msg.thumbnailFailed': 'Nie udało się przetworzyć „{filename}”',
   'notifications.deleteAllOfKind': 'Usuń wszystkie tego typu',
   'notifications.confirmDeleteGroup': 'Usunąć wszystkie {count} powiadomień tego typu?',

@@ -74,7 +74,12 @@ router.post('/approve', requireAuth, requireOwner, async (req, res) => {
     // The edition's sign-in rule binds pairing too: a TV must not get a
     // session for an account that could not sign in itself.
     const owner = await getUserByInternalId(req.user!.userId);
-    const refusal = owner ? signInRefusal(owner) : null;
+    // No account behind the token: never bind a code to nobody [API-CORE-073].
+    if (!owner) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    const refusal = signInRefusal(owner);
     if (refusal) {
       res.status(refusal.status).json(refusal.body);
       return;

@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import { renderWithRouter } from '../test-utils';
+// Imported statically on purpose: a cold import inside a test spends that
+// test's time limit on transforming the whole TimelineView tree, and on a
+// loaded runner that alone can time a test out.
+import { TimelineView } from './TimelineView';
 import { story } from '../test-story';
 import type { CameraEvent } from '../types';
 
@@ -79,7 +83,6 @@ afterEach(() => {
 });
 
 async function mountTimeline() {
-  const { TimelineView } = await import('./TimelineView');
   return renderWithRouter(
     <TimelineView cameraFilter={[]} onPlay={() => {}} allCameras={['Front']} />,
     { route: '/timeline?date=2026-07-31' },

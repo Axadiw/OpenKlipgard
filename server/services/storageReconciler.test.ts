@@ -27,6 +27,7 @@ const mockGetFileMetadataKeysByOwner = vi.fn();
 const mockGetEventByIdAnyOwner = vi.fn();
 const mockGetFileMetadataByKey = vi.fn();
 const mockHasFileMetadataUnderPrefix = vi.fn();
+const mockRecordUserObjectCount = vi.fn();
 
 vi.mock('../db/queries/storage.js', () => ({
   getUsersForScan: (...a: unknown[]) => mockGetUsersForScan(...a),
@@ -44,6 +45,7 @@ vi.mock('../db/queries/storage.js', () => ({
   withUserAdvisoryLock: async <T,>(_userId: number, fn: () => Promise<T>): Promise<T | null> => fn(),
   getUserIdsWithUnfinishedContentDeletion: (...a: unknown[]) => mockGetUserIdsWithUnfinishedContentDeletion(...a),
   hasUnfinishedContentDeletion: (id: number) => mockHasUnfinishedContentDeletion(id),
+  recordUserObjectCount: (...a: unknown[]) => mockRecordUserObjectCount(...a),
 }));
 vi.mock('../db/queries/events.js', () => ({
   cleanupOldZombieEvents: (...a: unknown[]) => mockCleanupOldZombieEvents(...a),
@@ -105,6 +107,7 @@ const mockConfig = vi.hoisted(() => ({
   s3ThumbnailsBucket: 'thumbnails',
   s3SidecarsBucket: 'sidecars',
   orphanAutoPurgeEnabled: true,
+  reconcilerMaxObjectsPerUser: 300_000,
 }));
 vi.mock('../config.js', () => ({ CONFIG: mockConfig }));
 
@@ -125,6 +128,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   // Default: auto-purge enabled (production default). Individual tests flip it.
   mockConfig.orphanAutoPurgeEnabled = true;
+  mockConfig.reconcilerMaxObjectsPerUser = 300_000;
   mockGetUsersForScan.mockResolvedValue([USER]);
   mockGetUserIdsWithUnfinishedContentDeletion.mockResolvedValue(new Set());
   mockHasUnfinishedContentDeletion.mockResolvedValue(false);
@@ -950,5 +954,98 @@ describe('storageReconciler — step 1 time budget', () => {
     const runB = await firstOf(6 * 3600_000);
 
     expect(runA).not.toBe(runB);
+  });
+});
+
+describe('storageReconciler — per-user ceiling (DATA-153)', () => {
+  const GIANT = { id: 1, uuid: '11111111-0000-0000-0000-000000000001', encryptionSalt: 's' };
+  const SMALL = { id: 2, uuid: '22222222-0000-0000-0000-000000000002', encryptionSalt: 's' };
+
+  function setup(giantCount: number) {
+    mockGetUsersForScan.mockResolvedValue([GIANT, SMALL]);
+    mockGetAllUserUuids.mockResolvedValue(new Set([GIANT.uuid, SMALL.uuid]));
+    mockGetAllUserUuidsAnyStatus.mockResolvedValue([GIANT.uuid, SMALL.uuid]);
+    mockGetUserQuota.mockResolvedValue({ diskUsageBytes: 999, diskLimitBytes: 0, transferUsageBytes: 0, transferLimitBytes: 0, transferResetAt: null });
+    // Rows that a complete listing would declare "absent" - only for the giant.
+    mockGetEventRefsByOwner.mockImplementation(async (id: number) =>
+      id === 1 ? [{ id: 'e1', views: [{ videoRelPath: 'a/not-in-listing.mp4' }], thumbnail: null }] : []);
+    mockGetFileMetadataKeysByOwner.mockImplementation(async (id: number) =>
+      id === 1 ? [{ s3Bucket: 'recordings', s3Key: `${GIANT.uuid}/x.mp4` }] : []);
+    mockListObjects.mockImplementation(async (bucket: string, prefix: string) => {
+      if (bucket !== 'recordings') return [];
+      if (prefix === `${GIANT.uuid}/`) {
+        return Array.from({ length: giantCount }, (_, i) => ({
+          key: `${GIANT.uuid}/d/${i}.mp4`, size: 1, lastModified: new Date(),
+        }));
+      }
+      if (prefix === `${SMALL.uuid}/`) {
+        return [{ key: `${SMALL.uuid}/ok.mp4`, size: 5, lastModified: new Date() }];
+      }
+      return [];
+    });
+  }
+
+  it('makes no absent or disk decision from a listing over the ceiling, and moves on', async () => {
+    mockConfig.reconcilerMaxObjectsPerUser = 10;
+    setup(50);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await runStorageReconciliation({ scanOrphans: false, stepOneBudgetMs: 600_000 });
+
+    // The giant: no disk overwrite, no event delete, no file-row cascade.
+    expect(mockSetDiskUsageAbsolute).not.toHaveBeenCalledWith(1, expect.anything());
+    expect(mockGetEventRefsByOwner).not.toHaveBeenCalledWith(1);
+    expect(mockGetFileMetadataKeysByOwner).not.toHaveBeenCalledWith(1, expect.anything());
+    expect(mockDeleteS3AndMetadata).not.toHaveBeenCalled();
+    // At most the ceiling was examined.
+    expect(mockTrackFileUpload.mock.calls.filter((c) => c[0] === 1).length).toBeLessThanOrEqual(10);
+    // The next user was still reconciled normally.
+    expect(mockSetDiskUsageAbsolute).toHaveBeenCalledWith(2, 5);
+    expect(warn.mock.calls.some((c) => String(c[0]).includes('partial'))).toBe(true);
+    expect(mockCreateReconciliationRun).toHaveBeenCalled();
+    // DATA-154: the count is recorded for both, the giant as partial at the ceiling.
+    expect(mockRecordUserObjectCount).toHaveBeenCalledWith(1, 10, 10, 'ceiling');
+    expect(mockRecordUserObjectCount).toHaveBeenCalledWith(2, 1, 10, null);
+  });
+
+  it('still reconciles a listing that fits the ceiling exactly', async () => {
+    mockConfig.reconcilerMaxObjectsPerUser = 50;
+    setup(50);
+    await runStorageReconciliation({ scanOrphans: false, stepOneBudgetMs: 600_000 });
+    expect(mockSetDiskUsageAbsolute).toHaveBeenCalledWith(1, 50);
+    expect(mockRecordUserObjectCount).toHaveBeenCalledWith(1, 50, 50, null);
+  });
+
+  it('goes on reconciling when the object-count write fails (DATA-154)', async () => {
+    mockConfig.reconcilerMaxObjectsPerUser = 50;
+    setup(3);
+    mockRecordUserObjectCount.mockRejectedValueOnce(new Error('db down'));
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await runStorageReconciliation({ scanOrphans: false, stepOneBudgetMs: 600_000 });
+    expect(mockSetDiskUsageAbsolute).toHaveBeenCalledWith(1, 3);
+  });
+
+  it('stops a listing mid-user when its time share is spent, decides nothing, next user still runs', async () => {
+    setup(2000);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const t0 = Date.now();
+    // Clock jumps past the 25 % share once the giant's listing has started,
+    // whichever user the rotating start offset reconciles first.
+    let giantListing = false;
+    const listImpl = mockListObjects.getMockImplementation()!;
+    mockListObjects.mockImplementation(async (bucket: string, prefix: string) => {
+      if (bucket === 'recordings' && prefix === `${GIANT.uuid}/`) giantListing = true;
+      return listImpl(bucket, prefix);
+    });
+    vi.spyOn(Date, 'now').mockImplementation(() => (giantListing ? t0 + 200_000 : t0));
+
+    await runStorageReconciliation({ scanOrphans: false, stepOneBudgetMs: 600_000 });
+
+    expect(mockSetDiskUsageAbsolute).not.toHaveBeenCalledWith(1, expect.anything());
+    expect(mockGetEventRefsByOwner).not.toHaveBeenCalledWith(1);
+    expect(mockDeleteS3AndMetadata).not.toHaveBeenCalled();
+    expect(mockTrackFileUpload.mock.calls.filter((c) => c[0] === 1).length).toBeLessThan(2000);
+    expect(warn.mock.calls.some((c) => String(c[0]).includes('partial'))).toBe(true);
+    expect(mockCreateReconciliationRun).toHaveBeenCalled();
   });
 });

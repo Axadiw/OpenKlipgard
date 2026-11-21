@@ -648,8 +648,13 @@ export async function getEvents(opts: {
   cursor?: EventCursor;
   limit: number;
   userId?: number;
-  ownerId?: number;
+  /** Required: the listing is always one owner's. A missing or non-integer
+   * owner fails closed instead of dropping the owner predicate [API-CORE-040]. */
+  ownerId: number;
 }): Promise<{ events: CameraEvent[]; total: number; nextCursor: EventCursor | null }> {
+  if (!Number.isInteger(opts.ownerId)) {
+    throw new Error('getEvents: ownerId must be an integer account id');
+  }
   // Keep on raw sql tag — multi-condition conditional WHERE builder is clearest this way.
   // The addParam helper accumulates positional params ($1, $2, …).
   const whereParams: unknown[] = [];
@@ -665,9 +670,7 @@ export async function getEvents(opts: {
   // three user-facing clip counts agree. See displayableEventPredicateSql.
   conditions.push(displayableEventPredicateSql('e'));
 
-  if (opts.ownerId !== undefined) {
-    conditions.push(`e.owner_id = ${addParam(opts.ownerId)}`);
-  }
+  conditions.push(`e.owner_id = ${addParam(opts.ownerId)}`);
   if (opts.cameras && opts.cameras.length > 0) {
     const placeholders = opts.cameras.map(c => addParam(c)).join(',');
     conditions.push(`e.camera IN (${placeholders})`);

@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { screen, waitFor, fireEvent } from '@testing-library/react';
 import { renderWithRouter } from '../test-utils';
+// Imported statically on purpose: a cold import inside a test spends that
+// test's time limit on transforming the whole TimelineView tree, and on a
+// loaded runner that alone can time a test out.
+import { TimelineView } from './TimelineView';
 import { story } from '../test-story';
 import type { CameraEvent } from '../types';
 
@@ -8,7 +12,12 @@ import type { CameraEvent } from '../types';
 // timeline: WEB-TIMELINE-021, 044, 051, 070 and 080.
 
 const REAL_NOW = Date.parse('2026-07-31T10:00:00.000Z');
-const SLOW = 30_000; // TimelineView is a heavy import on a loaded machine
+// A wait on a loaded runner. It MUST stay below the test's time limit (20 s
+// in CI): a test that hits the limit is abandoned while still running and can
+// break the tests after it, where a failed wait fails only its own test.
+const SLOW = 8_000;
+// Two waits fit in one test, also locally, where the default limit is 5 s.
+vi.setConfig({ testTimeout: 20_000 });
 
 function ev(id: string, camera: string, timestamp: string): CameraEvent {
   return {
@@ -70,7 +79,6 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 async function mount(opts: { route?: string; cameraFilter?: string[]; allCameras?: string[] } = {}) {
-  const { TimelineView } = await import('./TimelineView');
   return renderWithRouter(
     <TimelineView cameraFilter={opts.cameraFilter ?? []} onPlay={() => {}} allCameras={opts.allCameras ?? ['Front', 'Porch']} />,
     { route: opts.route ?? '/timeline?date=2026-07-31' },

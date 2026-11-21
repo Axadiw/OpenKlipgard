@@ -7,6 +7,7 @@ import {
   getInFlightVideoCount,
   _resetForTesting,
   _getLimitForTesting,
+  _getPerUserLimitForTesting,
 } from './concurrencyLimit.js';
 
 /**
@@ -130,5 +131,42 @@ describe('videoConcurrencyCap — per-pod /video request limiter', () => {
     res.emit('close');
     await new Promise((r) => setTimeout(r, 0));
     expect(getInFlightVideoCount()).toBe(0);
+  });
+});
+
+describe('videoConcurrencyCap — per-account ceiling (API-EVENTS-296)', () => {
+  const reqFor = (id: string): Request => ({ user: { userUuid: id } }) as unknown as Request;
+
+  it('429s the over-limit account only and frees slots exactly once', () => {
+    const lim = _getPerUserLimitForTesting();
+    const next = makeNext();
+    const held: FakeRes[] = [];
+    for (let i = 0; i < lim; i++) {
+      const r = makeRes();
+      held.push(r);
+      videoConcurrencyCap(reqFor('a'), r as unknown as Response, next);
+    }
+    expect(next).toHaveBeenCalledTimes(lim);
+
+    const over = makeRes();
+    videoConcurrencyCap(reqFor('a'), over as unknown as Response, next);
+    expect(over.statusCode).toBe(429);
+    expect((over.body as { code: string }).code).toBe('VIDEO_CONCURRENCY_LIMIT_REACHED');
+    expect(over.headers['Retry-After']).toBe('3');
+    expect(next).toHaveBeenCalledTimes(lim);
+
+    const other = makeRes();
+    videoConcurrencyCap(reqFor('b'), other as unknown as Response, next);
+    expect(other.statusCode).toBeUndefined();
+    expect(next).toHaveBeenCalledTimes(lim + 1);
+
+    held[0].emit('close');
+    held[0].emit('close');
+    const again = makeRes();
+    videoConcurrencyCap(reqFor('a'), again as unknown as Response, next);
+    expect(again.statusCode).toBeUndefined();
+    const again2 = makeRes();
+    videoConcurrencyCap(reqFor('a'), again2 as unknown as Response, next);
+    expect(again2.statusCode).toBe(429);
   });
 });

@@ -176,6 +176,12 @@ export function createApp(ext: ServerExtensions): express.Express {
     next();
   }, internalRouter);
 
+  // Catch-all 404 for unmatched routes — returns JSON instead of Express's
+  // default "Cannot GET /path" HTML, which leaks the framework identity.
+  app.use((_req, res) => {
+    res.status(404).json({ error: 'NOT_FOUND' });
+  });
+
   // Malformed JSON body / oversized body → quiet 4xx, NOT a reported error.
   // MUST come before setupErrorReportingExpressHandler so the consumed error
   // never reaches the reporter. See server/middleware/jsonError.ts.

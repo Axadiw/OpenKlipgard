@@ -582,6 +582,13 @@ CREATE SEQUENCE public.user_identities_id_seq
     NO MAXVALUE
     CACHE 1;
 ALTER SEQUENCE public.user_identities_id_seq OWNED BY public.user_identities.id;
+CREATE TABLE public.user_object_counts (
+    user_id integer NOT NULL,
+    object_count integer NOT NULL,
+    ceiling integer NOT NULL,
+    partial text,
+    counted_at timestamp with time zone DEFAULT now() NOT NULL
+);
 CREATE TABLE public.user_scan_state (
     user_id integer NOT NULL,
     last_scanned_at timestamp with time zone NOT NULL,
@@ -763,6 +770,8 @@ ALTER TABLE ONLY public.user_camera_profiles
     ADD CONSTRAINT user_camera_profiles_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY public.user_identities
     ADD CONSTRAINT user_identities_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY public.user_object_counts
+    ADD CONSTRAINT user_object_counts_pkey PRIMARY KEY (user_id);
 ALTER TABLE ONLY public.user_scan_state
     ADD CONSTRAINT user_scan_state_pkey PRIMARY KEY (user_id);
 ALTER TABLE ONLY public.user_sessions
@@ -908,6 +917,8 @@ ALTER TABLE ONLY public.user_camera_profiles
     ADD CONSTRAINT user_camera_profiles_user_id_users_id_fk FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
 ALTER TABLE ONLY public.user_identities
     ADD CONSTRAINT user_identities_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+ALTER TABLE ONLY public.user_object_counts
+    ADD CONSTRAINT user_object_counts_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
 ALTER TABLE ONLY public.user_scan_state
     ADD CONSTRAINT user_scan_state_user_id_users_id_fk FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
 ALTER TABLE ONLY public.user_sessions

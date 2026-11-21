@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import { renderWithRouter } from '../test-utils';
+// Imported statically on purpose: a cold import inside a test spends that
+// test's time limit on transforming the whole TimelineView tree, and on a
+// loaded runner that alone can time a test out.
+import { TimelineView } from './TimelineView';
 import { story } from '../test-story';
 import type { CameraEvent } from '../types';
 import { LONG_PRESS_MS, PRECISION_FLASH_MS } from './timelineSeek';
@@ -54,6 +58,13 @@ function stubBarBox(bar: Element) {
 const touch = (clientX: number, pointerId = 1) =>
   ({ pointerId, pointerType: 'touch', isPrimary: pointerId === 1, clientX, clientY: 20 });
 
+// How long a wait for the timeline (or the clip it opens) may take on a loaded
+// runner. It MUST stay below the describe's time limit: a slow mount then fails
+// this one test as a lookup error. A test that hits the time limit instead is
+// abandoned while still running, and its pending act() scope keeps React from
+// committing anything in the tests after it (they render an empty <div>).
+const WAIT = { timeout: 8_000 };
+
 const seekOf = () => screen.getByTestId('timeline-inline-video').getAttribute('data-seek-sec');
 const badge = () => screen.queryByTestId('timeline-precision-badge');
 
@@ -83,12 +94,11 @@ afterEach(() => {
 });
 
 async function mountAndGetBar() {
-  const { TimelineView } = await import('./TimelineView');
   renderWithRouter(
     <TimelineView cameraFilter={[]} onPlay={() => {}} allCameras={['Front']} />,
     { route: '/timeline?date=2026-07-31' },
   );
-  const bar = await screen.findByTestId('timeline-bar-ev-a');
+  const bar = await screen.findByTestId('timeline-bar-ev-a', undefined, WAIT);
   // findBy resolves on the DOM commit, before React's passive effects run —
   // and the handlers read effect-synced refs (camera list for hover rows,
   // visible events for long-press). A real user can't act within that tick;
@@ -98,14 +108,14 @@ async function mountAndGetBar() {
   return bar;
 }
 
-// The first mount pays for importing/transforming the whole TimelineView tree
-// (~2 s on an idle machine, >5 s under parallel load) — give it headroom.
+// Every wait in a test is WAIT (8 s) at most, so 20 s covers a mount and a
+// clip open on a loaded runner with room to spare.
 describe('TimelineView — bar click plays from the start; precision mode seeks', { timeout: 20_000 }, () => {
   it('a plain click in the middle of a bar plays the clip from 0', async (ctx) => {
     story(ctx, 'Zwykły klik w pasek zawsze startuje klip od początku — nawet trafiony w sam środek. Wcześniej klik mapował się proporcjonalnie na czas i user tracił początek zdarzenia.');
     const bar = await mountAndGetBar();
     fireEvent.click(bar, { clientX: MID_X });
-    const video = await screen.findByTestId('timeline-inline-video');
+    const video = await screen.findByTestId('timeline-inline-video', undefined, WAIT);
     expect(video.getAttribute('data-event-id')).toBe('ev-a');
     expect(seekOf()).toBe('0');
   });
@@ -114,18 +124,18 @@ describe('TimelineView — bar click plays from the start; precision mode seeks'
     story(ctx, 'Tryb precyzyjny z myszą: ⌘-klik (Mac) i Ctrl-klik (reszta) zachowują stare zachowanie — seek do klikniętego miejsca w pasku. Oba klawisze działają wszędzie, żeby klawiatura PC na Macu (i odwrotnie) nie blokowała funkcji.');
     const bar = await mountAndGetBar();
     fireEvent.click(bar, { clientX: MID_X, ctrlKey: true });
-    await screen.findByTestId('timeline-inline-video');
+    await screen.findByTestId('timeline-inline-video', undefined, WAIT);
     expect(seekOf()).toBe('15');
 
     fireEvent.click(bar, { clientX: 150, metaKey: true });
-    await waitFor(() => expect(seekOf()).toBe('7.5'));
+    await waitFor(() => expect(seekOf()).toBe('7.5'), WAIT);
   });
 
   it('a plain re-click of the playing clip restarts the same <video> from 0', async (ctx) => {
     story(ctx, 'Klik w pasek klipu, który już leci, puszcza go od nowa. Stan (klip, widok, seek 0) jest identyczny, więc player by się nie przemontował i klik nic by nie zrobił — dlatego restart idzie bezpośrednio na żywym <video>.');
     const bar = await mountAndGetBar();
     fireEvent.click(bar, { clientX: MID_X });
-    const video = await screen.findByTestId('timeline-inline-video') as HTMLVideoElement;
+    const video = await screen.findByTestId('timeline-inline-video', undefined, WAIT) as HTMLVideoElement;
 
     Object.defineProperty(video, 'currentTime', { configurable: true, writable: true, value: 12 });
     const play = vi.fn(() => Promise.resolve());
@@ -148,7 +158,7 @@ describe('TimelineView — bar click plays from the start; precision mode seeks'
     expect(badge()).toBeNull();
     act(() => { vi.advanceTimersByTime(LONG_PRESS_MS); });
 
-    await screen.findByTestId('timeline-inline-video');
+    await screen.findByTestId('timeline-inline-video', undefined, WAIT);
     expect(seekOf()).toBe('15');
     expect(badge()).toBeInTheDocument();
     expect(vibrate).toHaveBeenCalledWith(10);
@@ -174,7 +184,7 @@ describe('TimelineView — bar click plays from the start; precision mode seeks'
     fireEvent.click(bar, { clientX: MID_X });
     act(() => { vi.advanceTimersByTime(LONG_PRESS_MS); });
 
-    await screen.findByTestId('timeline-inline-video');
+    await screen.findByTestId('timeline-inline-video', undefined, WAIT);
     expect(seekOf()).toBe('0');
     expect(badge()).toBeNull();
     expect(fireEvent.contextMenu(bar)).toBe(true); // nothing to suppress
@@ -241,7 +251,7 @@ describe('TimelineView — bar click plays from the start; precision mode seeks'
     expect(bar.style.cursor).toBe('crosshair');
 
     fireEvent.click(bar, { clientX: MID_X, ctrlKey: true });
-    await screen.findByTestId('timeline-inline-video');
+    await screen.findByTestId('timeline-inline-video', undefined, WAIT);
     expect(seekOf()).toBe('15');
   });
 
@@ -263,7 +273,7 @@ describe('TimelineView — bar click plays from the start; precision mode seeks'
       // Layout-less DOM: the scroll box sits at 0,0, so clientX 400 of 800 px
       // is 12:00 (the clip) and clientY 20 is row 0 (camera "Front").
       fireEvent.mouseMove(scroll, { clientX: 400, clientY: 20 });
-      const hint = await screen.findByTestId('timeline-tooltip-hint');
+      const hint = await screen.findByTestId('timeline-tooltip-hint', undefined, WAIT);
       expect(hint.textContent).toBe('timeline.precisionHint:⌘');
     } finally {
       Object.defineProperty(window, 'matchMedia', { configurable: true, writable: true, value: originalMatchMedia });

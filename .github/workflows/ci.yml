@@ -97,8 +97,7 @@ jobs:
 
   # Upgrade from the latest release to this tree, as a job of its own, so a
   # failure while installing the older release never hides the result of the
-  # fresh install of this tree. (Installs of 1.0.0 sometimes left a recording
-  # in pending_sidecar; 1.0.1 and later did not.)
+  # fresh install of this tree.
   smoke-upgrade:
     runs-on: ubuntu-latest
     timeout-minutes: 45

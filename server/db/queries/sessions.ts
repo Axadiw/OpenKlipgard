@@ -111,6 +111,19 @@ export async function getSessionAuthState(
   return { tokenGeneration: row.tokenGeneration, sessionActive: row.sessionId !== null };
 }
 
+/** When the live (unrevoked) session `sessionId` of `userId` was signed in; null if none. */
+export async function getSessionSignedInAt(userId: number, sessionId: string): Promise<Date | null> {
+  const [row] = await db
+    .select({ createdAt: userSessions.createdAt })
+    .from(userSessions)
+    .where(and(
+      eq(userSessions.id, sessionId),
+      eq(userSessions.userId, userId),
+      isNull(userSessions.revokedAt),
+    ));
+  return row?.createdAt ?? null;
+}
+
 /** Delete sessions whose refresh token has expired (revoked or not). */
 export async function deleteExpiredSessions(): Promise<number> {
   const rows = await db.delete(userSessions)

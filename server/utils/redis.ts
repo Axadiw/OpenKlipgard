@@ -70,6 +70,10 @@ export function getRedis(overrides?: RedisOptions): Redis {
     // takes precedence in ioredis, so this never clobbers the normal path —
     // and it guarantees the password rides every reconnect's AUTH.
     password: resolvePassword(),
+    // ioredis 6 speaks RESP3 by default, which changes reply shapes (stream
+    // reads come back as maps). The stream parsers and rate limiter read the
+    // RESP2 shapes: keep the v5 wire protocol. Duplicates inherit it.
+    protocol: 2,
     maxRetriesPerRequest: null,
     enableReadyCheck: true,
     lazyConnect: false,

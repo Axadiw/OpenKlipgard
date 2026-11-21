@@ -170,6 +170,7 @@ async function main(): Promise<void> {
       // Compose it into the ioredis options — same pattern as the
       // klipgard-reconcile CronJob fix from PR #170.
       redis = new Redis(redisUrl, {
+        protocol: 2, // RESP2, as getRedis() (server/utils/redis.ts)
         maxRetriesPerRequest: null,
         lazyConnect: true,
         password: process.env.REDIS_PASSWORD || undefined,

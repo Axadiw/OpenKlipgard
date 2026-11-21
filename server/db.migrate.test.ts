@@ -68,7 +68,8 @@ describe.skipIf(!TEST_DB_URL)('drizzle migrate', () => {
     // 0027_push_device_session_binding adds columns only (still 39)
     // 0026_purchase_statements adds purchase_statements (39 total)
     // 0028_lockout_per_source adds login_failures (40 total); 0029_admin_deactivated adds a column only
-    expect(tables).toHaveLength(40);
+    // 0031_user_object_counts adds user_object_counts (41 total)
+    expect(tables).toHaveLength(41);
     expect(tables).toEqual(expect.arrayContaining([
       'plans', 'users', 'email_tokens', 'passkeys', 'passkey_backup_codes',
       'events', 'event_view_files', 'file_metadata', 'user_scan_state', 'user_camera_profiles',
@@ -81,7 +82,7 @@ describe.skipIf(!TEST_DB_URL)('drizzle migrate', () => {
       'ip_login_attempts', 'invite_codes',
       'payment_customers', 'subscriptions', 'payment_events', 'payment_reconcile_runs',
       'user_sessions', 'content_deletions', 'content_deletion_runs', 'account_notices',
-      'purchase_statements',
+      'purchase_statements', 'user_object_counts',
     ]));
   });
 
@@ -111,7 +112,7 @@ describe.skipIf(!TEST_DB_URL)('drizzle migrate', () => {
     const { rows } = await pool.query<{ count: string }>(
       `SELECT COUNT(*)::text AS count FROM "${SCRATCH_SCHEMA}".__drizzle_migrations`,
     );
-    expect(parseInt(rows[0].count, 10)).toBe(31); // 30->31 when 0030_session_refresh_seq was added
+    expect(parseInt(rows[0].count, 10)).toBe(32); // 31->32 when 0031_user_object_counts was added
   });
 
   it('preserves CITEXT and JSONB column types', { timeout: 60_000 }, async () => {

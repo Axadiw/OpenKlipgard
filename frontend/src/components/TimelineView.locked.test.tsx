@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import { renderWithRouter } from '../test-utils';
+// Imported statically on purpose: a cold import inside a test spends that
+// test's time limit on transforming the whole TimelineView tree, and on a
+// loaded runner that alone can time a test out.
+import { TimelineView } from './TimelineView';
 import { story } from '../test-story';
 import type { CameraEvent } from '../types';
 
@@ -52,7 +56,6 @@ describe('TimelineView — locked account', () => {
     story(ctx, 'Zablokowane konto otwiera klip na osi czasu: zamiast wiecznego "Loading..." widzi komunikat, bez spinnera i bez przycisków ponawiania.');
     const { ApiError } = await import('../api');
     getVideoUrl.mockRejectedValue(new ApiError('Account locked', 403, { code: 'ACCOUNT_LOCKED' }));
-    const { TimelineView } = await import('./TimelineView');
     renderWithRouter(<TimelineView cameraFilter={[]} onPlay={() => {}} allCameras={['Front']} />, { route: '/timeline' });
 
     await waitFor(() => expect(screen.getByTestId('timeline-inline-locked')).toHaveTextContent('account.lockedPlayback'));
@@ -64,7 +67,6 @@ describe('TimelineView — locked account', () => {
   it('keeps the plain loading state for other failures', async (ctx) => {
     story(ctx, 'Inny błąd niż blokada konta nie pokazuje komunikatu o blokadzie.');
     getVideoUrl.mockRejectedValue(new Error('boom'));
-    const { TimelineView } = await import('./TimelineView');
     renderWithRouter(<TimelineView cameraFilter={[]} onPlay={() => {}} allCameras={['Front']} />, { route: '/timeline' });
     await waitFor(() => expect(getVideoUrl).toHaveBeenCalled());
     expect(screen.queryByTestId('timeline-inline-locked')).toBeNull();
@@ -73,7 +75,6 @@ describe('TimelineView — locked account', () => {
   it('[WEB-TIMELINE-059] words the loading placeholder through the catalog', async (ctx) => {
     story(ctx, 'Placeholder „Loading...” przy wczytywaniu klipu na osi czasu był wpisany po angielsku i nigdy się nie tłumaczył, choć reszta nakładki jest przetłumaczona. Teraz idzie przez klucz timeline.loadingPlayer.');
     getVideoUrl.mockReturnValue(new Promise(() => {}));
-    const { TimelineView } = await import('./TimelineView');
     renderWithRouter(<TimelineView cameraFilter={[]} onPlay={() => {}} allCameras={['Front']} />, { route: '/timeline' });
     await waitFor(() => expect(getVideoUrl).toHaveBeenCalled());
     expect(screen.queryByText('Loading...')).toBeNull();

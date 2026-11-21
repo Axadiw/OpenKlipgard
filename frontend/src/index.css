@@ -216,6 +216,8 @@ input:-webkit-autofill:active{
 .badge.badge-manual{background:var(--bg3);color:var(--text2);margin-left:0}
 .badge.badge-held{background:var(--usage-yellow);color:#1a202c}
 .badge.badge-progress{background:var(--usage-red);color:#fff}
+.badge.badge-warning{background:var(--usage-yellow);color:#1a202c}
+.badge.badge-danger{background:var(--usage-red);color:#fff}
 /* Filter panel typography is unified at .8rem so labels, chips, and date
    inputs sit at the same scale — the previous mix of .8/.75/default was
    the "different font sizes" complaint. */

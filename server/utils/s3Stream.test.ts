@@ -6,6 +6,7 @@ import {
   pipeS3IntoSink,
   pipeThrottleToResponse,
   attachSlowConsumerMonitor,
+  isClientAbort,
   SLOW_CONSUMER_GRACE_MS,
   SLOW_CONSUMER_CHECK_INTERVAL_MS,
   SLOW_CONSUMER_CONSECUTIVE_CHECKS,
@@ -230,6 +231,53 @@ describe('pipeS3ToResponse — socket lifecycle', () => {
     await pipeS3ToResponse(body, res);
 
     expect(Buffer.concat(chunks).toString()).toBe('hello, world');
+  });
+});
+
+describe('pipeS3ToResponse — client abort vs source failure [API-EVENTS-296]', () => {
+  it('marks a client abort mid-body so the route can log it at info level', async (ctx) => {
+    story(
+      ctx,
+      'Klient zamyka połączenie w połowie oryginału albo wideo (zamknięta karta, przerwane pobieranie). To nie jest awaria serwera: route loguje to na poziomie info i Sentry nie dostaje zdarzenia. Na produkcji leciało jako "Original download error: Premature close".',
+    );
+    const body = makeInfiniteBody();
+    const res = new PassThrough();
+    res.on('data', () => {});
+
+    const done = pipeS3ToResponse(body, res).then(() => null, (err: unknown) => err);
+    await awaitFirstChunk(res);
+    res.destroy();
+    const err = await done;
+    cleanupLeakedBody(body);
+
+    expect(err).toBeInstanceOf(Error);
+    expect(isClientAbort(err)).toBe(true);
+  });
+
+  it('does not mark a source failure mid-body as a client abort', async (ctx) => {
+    story(
+      ctx,
+      'Gdy to źródło z object store urwie się w połowie (błąd albo zamknięcie bez końca strumienia), to jest prawdziwa awaria i MUSI zostać błędem. Node też nazywa przedwczesne zamknięcie źródła "Premature close", więc sam kod błędu nie wystarcza do rozróżnienia.',
+    );
+    for (const cause of [new Error('socket hang up'), undefined]) {
+      const body = makeInfiniteBody();
+      const res = new PassThrough();
+      res.on('data', () => {});
+
+      const done = pipeS3ToResponse(body, res).then(() => null, (err: unknown) => err);
+      await awaitFirstChunk(res);
+      body.destroy(cause);
+      const err = await done;
+
+      expect(err).toBeInstanceOf(Error);
+      expect(isClientAbort(err)).toBe(false);
+    }
+  });
+
+  it('does not mark unrelated values as a client abort', () => {
+    expect(isClientAbort(new Error('Premature close'))).toBe(false);
+    expect(isClientAbort(null)).toBe(false);
+    expect(isClientAbort('Premature close')).toBe(false);
   });
 });
 

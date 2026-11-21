@@ -149,6 +149,6 @@ describe.skipIf(!TEST_DB_URL)('drizzle migrate v11: user_camera_profiles.views_c
     //  0016_add_invite_codes took this from 16 → 17;
     //  0017_add_push_device_relay took this from 17 → 18;
     //  0018_split_login_lockout_channels took this from 18 → 19).
-    expect(parseInt(rows[0].count, 10)).toBe(31); // 30->31 when 0030_session_refresh_seq was added
+    expect(parseInt(rows[0].count, 10)).toBe(32); // 31->32 when 0031_user_object_counts was added
   });
 });

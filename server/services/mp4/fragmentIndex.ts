@@ -6,6 +6,7 @@ import {
   parseTrun,
   parseTfdt,
   type BoxHeader,
+  assertBoxReadWithinCeiling,
 } from './boxes.js';
 import { inspectMoov, type MoovInfo } from './moov.js';
 
@@ -330,6 +331,9 @@ export async function indexFragmentedMp4(
         `indexFragmentedMp4: expected moof at file offset ${cursorFileOffset}, got "${moofHdr.type}"`,
       );
     }
+
+    // The moof size comes from the file. Cap it before it sizes a read ([WORKER-123]).
+    assertBoxReadWithinCeiling(moofHdr.size, `indexFragmentedMp4 (moof at offset ${cursorFileOffset})`);
 
     // Need both moof + the 8-byte mdat header in buf
     const requiredEndInBuf = offsetInBuf + moofHdr.size + 16; // +16 covers 8B mdat header + 8B largesize safety

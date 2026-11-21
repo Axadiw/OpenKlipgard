@@ -23,6 +23,7 @@ import { buildCleanFrameSidecar } from './mp4/cleanFrameBuilder.js';
 import { buildFrameGridSidecar } from './mp4/frameGridBuilder.js';
 import { parseSidecar, readDurationSecondsFromPrelude } from './mp4/sidecar.js';
 import type { RangeFetcher } from './mp4/fragmentIndex.js';
+import { assertBoxReadWithinCeiling } from './mp4/boxes.js';
 import { createCachingFetcher } from './mp4/cachingFetcher.js';
 import { SidecarParseCache } from './mp4/sidecarParseCache.js';
 import {
@@ -158,6 +159,7 @@ export async function generateSidecarForFile(
   // (buildSidecarForFile + buildCleanFrameSidecar + buildFrameGridSidecar)
   // share fetched moof buffers — reducing N×M S3 Range GETs to ~N.
   const rawFetchRange: RangeFetcher = async (start, end) => {
+    assertBoxReadWithinCeiling(end - start + 1, 'sidecar range read');
     const { body } = await getObject(
       fm.s3Bucket || CONFIG.s3RecordingsBucket,
       fm.s3Key,

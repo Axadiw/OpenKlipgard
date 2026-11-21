@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { screen } from '@testing-library/react';
 import { renderWithRouter } from '../test-utils';
+// Imported statically on purpose: a cold import inside a test spends that
+// test's time limit on transforming the whole TimelineView tree, and on a
+// loaded runner that alone can time a test out.
+import { TimelineView } from './TimelineView';
 import { story } from '../test-story';
 import type { CameraEvent } from '../types';
 
@@ -68,7 +72,6 @@ describe('TimelineView date label — west of Greenwich', () => {
     // The view seeds its window from `window.location.search` directly (not
     // from the router), so MemoryRouter's entry alone wouldn't reach it.
     window.history.replaceState({}, '', '/timeline?date=2026-07-31');
-    const { TimelineView } = await import('./TimelineView');
     renderWithRouter(
       <TimelineView cameraFilter={[]} onPlay={() => {}} allCameras={['Front']} />,
       { route: '/timeline?date=2026-07-31' },
@@ -83,7 +86,6 @@ describe('TimelineView date label — west of Greenwich', () => {
   it('[WEB-TIMELINE-026] labels the midnight line with its wall-clock date, not the browser-local day before it', async (ctx) => {
     story(ctx, 'Małe etykiety przy liniach północy formatowały północ UTC lokalnymi getterami, więc w Nowym Jorku linia między 31 lipca a 1 sierpnia nazywała się „Fri 31 Jul”. Etykieta czyta teraz datę ścienną (południe lokalne przeżywa każdy offset), tak jak nagłówek nad osią.');
     window.history.replaceState({}, '', '/timeline?date=2026-07-31');
-    const { TimelineView } = await import('./TimelineView');
     renderWithRouter(
       <TimelineView cameraFilter={[]} onPlay={() => {}} allCameras={['Front']} />,
       { route: '/timeline?date=2026-07-31' },

@@ -33,6 +33,18 @@ interface MediaScope {
   allowed: (req: Request) => boolean;
 }
 
+const SESSION_KINDS = new Set(['access', 'refresh', 'media']);
+
+/** A token the server issues for a session: a known kind (missing = access),
+ *  a positive integer account id and a UUID string. */
+export function isSessionTokenShape(p: unknown): p is JwtPayload {
+  if (!p || typeof p !== 'object') return false;
+  const t = p as Record<string, unknown>;
+  if (t.kind !== undefined && !SESSION_KINDS.has(t.kind as string)) return false;
+  return Number.isInteger(t.userId) && (t.userId as number) > 0
+    && typeof t.userUuid === 'string' && t.userUuid.length > 0;
+}
+
 function authenticate(req: Request, res: Response, next: NextFunction, allowMedia: boolean, scope?: MediaScope): void {
   const token = extractToken(req);
   if (!token) {
@@ -49,6 +61,14 @@ function authenticate(req: Request, res: Response, next: NextFunction, allowMedi
   // Refresh tokens may only be sent to /auth/refresh — never as a Bearer on
   // any other route. A stolen access token that leaked should NOT get a way
   // to refresh itself just because it was presented here.
+  // Only session tokens of a real account are credentials here [API-CORE-040].
+  // Any other kind signed with the same secret (and any token without a numeric
+  // account id and UUID) is refused, so a token minted for another purpose can
+  // never stand in for a session and reach a query with an undefined owner.
+  if (!isSessionTokenShape(payload)) {
+    res.status(401).json({ error: 'Wrong token kind' });
+    return;
+  }
   const isMedia = payload.kind === 'media' || !!payload.mediaEventId || !!payload.mediaScope;
   // A scoped media token passes only the guard of its own scope, on the
   // requests that guard allows; an event media token never passes a scoped guard.

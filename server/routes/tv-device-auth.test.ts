@@ -136,6 +136,21 @@ describe('tv device-auth router', () => {
   });
 
   describe('POST /approve', () => {
+    beforeEach(() => {
+      mockGetUserByInternalId.mockResolvedValue({ id: 'u-1', internalId: 1, emailVerified: true, active: true });
+    });
+
+    // [API-CORE-073] A token with no account behind it binds nothing.
+    it('never binds a code when no account stands behind the token', async (ctx) => {
+      story(ctx, 'Token bez konta w bazie nie zatwierdzi kodu telewizora — kod nie zostaje „spalony” dla nikogo.');
+      mockGetUserByInternalId.mockResolvedValue(undefined);
+
+      const res = await request(app).post('/api/v0/tv/device/approve').send({ user_code: 'K7QF3M9P' });
+
+      expect(res.status).toBe(401);
+      expect(mockApproveDeviceCode).not.toHaveBeenCalled();
+    });
+
     it('approves a pending code for the signed-in user', async (ctx) => {
       story(ctx, 'Zalogowany użytkownik wpisuje kod z telewizora — serwer wiąże ten kod z jego kontem, dzięki czemu telewizor przy kolejnym odpytaniu dostanie token tego konkretnego użytkownika.');
       mockApproveDeviceCode.mockResolvedValue({ id: 7, userId: 1, status: 'approved' });

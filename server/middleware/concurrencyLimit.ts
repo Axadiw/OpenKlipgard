@@ -29,6 +29,10 @@
  *               sustained-abuse scenarios; this cap only protects the
  *               instantaneous socket pool.
  *
+ * Per-account ceiling (API-EVENTS-296): the earlier
+ * per-user tier of 5 was too low, so it is back at 24 on top of the global cap.
+ * Env: `VIDEO_PER_USER_CONCURRENCY_LIMIT`.
+ *
  * Tunable via env: `VIDEO_CONCURRENCY_LIMIT` (e.g. raise to 400 if pod
  * scales up; lower for a tiny-instance deploy).
  *
@@ -43,7 +47,16 @@ const VIDEO_CONCURRENCY_LIMIT = parseInt(
   10,
 );
 
+// API-EVENTS-296: one account may hold at most this many slots on one pod. A
+// busy client (player + scrub preview + prefetch ranges, two or three open
+// tabs) uses well under ten; the cap stops one account from taking the pod.
+const VIDEO_PER_USER_LIMIT = Math.max(
+  1,
+  parseInt(process.env.VIDEO_PER_USER_CONCURRENCY_LIMIT || '24', 10) || 24,
+);
+
 let inFlight = 0;
+const perUser = new Map<string, number>();
 
 /**
  * Express middleware. Mount BEFORE the route handler — `release` is wired
@@ -59,6 +72,16 @@ export function videoConcurrencyCap(
   res: Response,
   next: NextFunction,
 ): void {
+  const userKey = (req as { user?: { userUuid?: string } }).user?.userUuid;
+  if (userKey && (perUser.get(userKey) ?? 0) >= VIDEO_PER_USER_LIMIT) {
+    recordVideoServeFailure('concurrency_cap');
+    res.setHeader('Retry-After', '3');
+    res.status(429).json({
+      error: 'Too many concurrent video streams for this account; retry shortly',
+      code: 'VIDEO_CONCURRENCY_LIMIT_REACHED',
+    });
+    return;
+  }
   if (inFlight >= VIDEO_CONCURRENCY_LIMIT) {
     // A 429 mid-stream is invisible to a native player — it just stops
     // downloading — so this counter is the only way to tell "the pod was at
@@ -73,6 +96,7 @@ export function videoConcurrencyCap(
   }
 
   inFlight += 1;
+  if (userKey) perUser.set(userKey, (perUser.get(userKey) ?? 0) + 1);
   let released = false;
   let closed = false;
   let pending = 0;
@@ -80,6 +104,11 @@ export function videoConcurrencyCap(
     if (released) return;
     released = true;
     inFlight = Math.max(0, inFlight - 1);
+    if (userKey) {
+      const n = (perUser.get(userKey) ?? 0) - 1;
+      if (n > 0) perUser.set(userKey, n);
+      else perUser.delete(userKey);
+    }
   };
   // The slot is a proxy for "work still holding an S3 socket / buffer", and
   // that work can outlive the connection (a handler still draining a read when
@@ -131,9 +160,15 @@ export function getInFlightVideoCount(): number {
 /** Test-only — reset the counter between unit tests. */
 export function _resetForTesting(): void {
   inFlight = 0;
+  perUser.clear();
 }
 
 /** Test-only — expose the limit so tests don't hardcode the number. */
 export function _getLimitForTesting(): number {
   return VIDEO_CONCURRENCY_LIMIT;
+}
+
+/** Test-only — expose the per-account limit. */
+export function _getPerUserLimitForTesting(): number {
+  return VIDEO_PER_USER_LIMIT;
 }

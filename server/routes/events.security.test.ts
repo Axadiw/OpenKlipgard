@@ -110,6 +110,8 @@ import { checkAndResetTransfer, updateTransferUsage } from '../db/queries/storag
 import { generateMediaToken } from '../services/auth.js';
 import { mediaRateLimit } from '../middleware/rateLimit.js';
 import { Readable } from 'stream';
+import http from 'http';
+import type { AddressInfo } from 'net';
 import type { Response as ExpressResponse } from 'express';
 
 // ---------------------------------------------------------------------------
@@ -234,6 +236,20 @@ describe('Events routes — cross-user access prevention', () => {
   // =========================================================================
   // 1. Event detail — cross-user isolation
   // =========================================================================
+
+  // [API-CORE-040] A request user without an
+  // account id must never reach the listing query (which then had no owner predicate).
+  describe('GET /events — request user without an account id', () => {
+    it('answers 401 and never queries the events table', async (ctx) => {
+      story(ctx, 'Lista nagrań bez identyfikatora konta w tokenie zwraca 401 i nie odpytuje bazy — nigdy nie pokazuje nagrań wszystkich klientów.');
+      const app = buildApp({ kind: 'oauth-signup', email: 'x@test.com' } as unknown as JwtPayload);
+
+      const res = await request(app).get('/events');
+
+      expect(res.status).toBe(401);
+      expect(vi.mocked(getEvents)).not.toHaveBeenCalled();
+    });
+  });
 
   describe('GET /events/:id/detail — ownership check', () => {
     it('User A can access their own event detail', async (ctx) => {
@@ -1369,6 +1385,84 @@ describe('Events routes — cross-user access prevention', () => {
       // Every request read the object store more than once (head probe + data).
       expect(vi.mocked(getObject).mock.calls.length).toBeGreaterThanOrEqual(16);
       expect(Math.max(...peaks)).toBeLessThanOrEqual(ROUTE_CLOSE_LISTENER_BUDGET);
+    });
+  });
+
+  // =========================================================================
+  // [API-EVENTS-296] A client that leaves mid-body is not a server failure.
+  // =========================================================================
+
+  describe('GET /events/:id/video/:view/original — client abort vs source failure', () => {
+    /** An endless S3 body: 64 KiB per tick until destroyed. */
+    function endlessBody(): Readable {
+      const r: Readable = new Readable({
+        read() { setImmediate(() => { if (!r.destroyed) r.push(Buffer.alloc(64 * 1024, 1)); }); },
+      });
+      return r;
+    }
+
+    /** GET the original over a real socket; `onFirstChunk` runs once the body starts. */
+    async function download(onFirstChunk: (req: http.ClientRequest) => void): Promise<void> {
+      const server = buildApp(USER_A).listen(0);
+      try {
+        const { port } = server.address() as AddressInfo;
+        await new Promise<void>((resolve) => {
+          const req = http.get(`http://127.0.0.1:${port}/events/evt-001/video/00/original`, (res) => {
+            res.once('data', () => onFirstChunk(req));
+            res.on('data', () => {});
+            res.on('close', () => resolve());
+            res.on('error', () => resolve());
+          });
+          req.on('error', () => resolve());
+        });
+      } finally {
+        server.closeAllConnections();
+        await new Promise((r) => server.close(r));
+      }
+    }
+
+    it('logs a client abort at info level, never as an error', async (ctx) => {
+      story(
+        ctx,
+        'Użytkownik przerywa pobieranie oryginału (zamyka kartę, anuluje zapis). Serwer dostaje "Premature close" i do tej pory logował to przez console.error, więc każde przerwane pobieranie było zdarzeniem w Sentry ("Original download error: Premature close"). To nie jest awaria serwera: log ma być na poziomie info.',
+      );
+      vi.mocked(getEventByIdForOwner).mockResolvedValue(EVENT_OWNED_BY_A);
+      vi.mocked(headObject).mockResolvedValue({ contentLength: 50 * 1024 * 1024, lastModified: new Date() });
+      vi.mocked(getObject).mockResolvedValue({ body: endlessBody(), contentRange: undefined });
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      try {
+        await download((req) => req.destroy());
+        await vi.waitFor(() => {
+          expect(logSpy).toHaveBeenCalledWith('Original download: client closed the connection before the end');
+        });
+        expect(errorSpy.mock.calls.filter(([m]) => String(m).startsWith('Original download error'))).toEqual([]);
+      } finally {
+        errorSpy.mockRestore();
+        logSpy.mockRestore();
+      }
+    });
+
+    it('still logs a source failure mid-body as an error', async (ctx) => {
+      story(
+        ctx,
+        'Gdy to object store urwie strumień w połowie, to jest prawdziwa awaria i dalej MUSI trafić do Sentry jako błąd.',
+      );
+      vi.mocked(getEventByIdForOwner).mockResolvedValue(EVENT_OWNED_BY_A);
+      vi.mocked(headObject).mockResolvedValue({ contentLength: 50 * 1024 * 1024, lastModified: new Date() });
+      const body = endlessBody();
+      vi.mocked(getObject).mockResolvedValue({ body, contentRange: undefined });
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      try {
+        await download(() => body.destroy(new Error('socket hang up')));
+        await vi.waitFor(() => {
+          expect(errorSpy).toHaveBeenCalledWith('Original download error:', 'socket hang up');
+        });
+      } finally {
+        errorSpy.mockRestore();
+        logSpy.mockRestore();
+      }
     });
   });
 });

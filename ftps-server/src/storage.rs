@@ -61,6 +61,8 @@ const MAX_CONCURRENT_UPLOADS_PER_USER: u32 = 24;
 struct UploadSlot {
     counters: Arc<DashMap<String, AtomicU32>>,
     user_uuid: String,
+    /// Process-wide permit, released together with the per-user slot.
+    _global: Option<tokio::sync::OwnedSemaphorePermit>,
 }
 
 impl Drop for UploadSlot {
@@ -93,7 +95,9 @@ pub struct KlipgardStorage {
     /// MAX_UPLOAD_BYTES × N concurrent-session TOCTOU window in
     /// `claim_disk_space_and_tidy` to MAX_UPLOAD_BYTES × MAX_CONCURRENT_UPLOADS_PER_USER.
     upload_counters: Arc<DashMap<String, AtomicU32>>,
-
+    /// Process-wide in-flight upload permits, shared by every connection
+    /// (FTPS-165). Bounds buffer memory regardless of the account count.
+    global_uploads: Arc<tokio::sync::Semaphore>,
 }
 
 impl fmt::Debug for KlipgardStorage {
@@ -330,12 +334,14 @@ impl KlipgardStorage {
         s3: S3,
         api: InternalApi,
         streams: StreamsPublisher,
+        global_uploads: Arc<tokio::sync::Semaphore>,
     ) -> Self {
         Self {
             s3,
             api,
             streams,
             upload_counters: Arc::new(DashMap::new()),
+            global_uploads,
         }
     }
 
@@ -346,6 +352,8 @@ impl KlipgardStorage {
     /// returned guard releases the slot on drop, so a crashed/cancelled
     /// upload path doesn't leak the counter.
     fn try_reserve_upload_slot(&self, user_uuid: &str) -> Option<UploadSlot> {
+        // Process-wide ceiling first: never blocks, refuses when exhausted.
+        let global = self.global_uploads.clone().try_acquire_owned().ok()?;
         let entry = self
             .upload_counters
             .entry(user_uuid.to_string())
@@ -367,6 +375,7 @@ impl KlipgardStorage {
                     return Some(UploadSlot {
                         counters: self.upload_counters.clone(),
                         user_uuid: user_uuid.to_string(),
+                        _global: Some(global),
                     });
                 }
                 Err(observed) => current = observed,
@@ -908,7 +917,7 @@ impl StorageBackend<KlipgardUser> for KlipgardStorage {
                 warn!(
                     user_uuid = %user.user_uuid,
                     cap = MAX_CONCURRENT_UPLOADS_PER_USER,
-                    "Rejecting upload — concurrent upload cap reached"
+                    "Rejecting upload — per-account or process-wide upload cap reached"
                 );
                 return Err(Error::new(
                     ErrorKind::TransientFileNotAvailable,
@@ -1703,6 +1712,7 @@ mod tests {
                         return Some(UploadSlot {
                             counters: counters.clone(),
                             user_uuid: "u".to_string(),
+                            _global: None,
                         });
                     }
                     Err(observed) => cur = observed,
@@ -1717,6 +1727,19 @@ mod tests {
 
         drop(held);
         assert!(take().is_some(), "slots must return to the pool on drop");
+    }
+
+    /// FTPS-165: the process-wide cap refuses without blocking and frees a
+    /// slot when the guard drops.
+    #[test]
+    fn global_upload_cap_binds_and_releases() {
+        let sem = Arc::new(tokio::sync::Semaphore::new(3));
+        let held: Vec<_> = (0..3)
+            .map(|_| sem.clone().try_acquire_owned().expect("slot up to the cap"))
+            .collect();
+        assert!(sem.clone().try_acquire_owned().is_err(), "N+1 must be refused");
+        drop(held);
+        assert!(sem.clone().try_acquire_owned().is_ok(), "drop frees a slot");
     }
 
     #[test]
