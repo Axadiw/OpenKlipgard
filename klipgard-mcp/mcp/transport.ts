@@ -108,9 +108,12 @@ function registerAllTools(server: Server, auth: McpAuthContext): void {
 }
 
 export function mountMcpTransport(app: Express): void {
-  // MCP Streamable HTTP (spec 2025-06-18): one URL handles POST (client→server),
-  // GET (server→client SSE stream) and DELETE (session terminate). Clients can
-  // configure us with just { "url": "https://<your-server>/mcp" } — no bridge.
+  // MCP Streamable HTTP (spec 2025-06-18): one URL handles POST (client→server)
+  // and DELETE (session terminate). Clients can configure us with just
+  // { "url": "https://<your-server>/mcp" } — no bridge.
+  // GET (server→client SSE stream) answers 405 [MCP-096]: the server never sends
+  // a server-initiated message, and an idle stream costs memory per connection
+  // that no per-token limit bounds (a refresh resets the token hash).
   const auth = [
     bearerAuthMcp,
     perTokenRateLimit({ points: 600, durationSec: 60, keyPrefix: 'mcp-rpc' }),
@@ -129,6 +132,13 @@ export function mountMcpTransport(app: Express): void {
     await transport.handleRequest(req, res, req.body);
   };
   app.post('/mcp', ...auth, handler);
-  app.get('/mcp', ...auth, handler);
+  app.get('/mcp', ...auth, (_req: Request, res: Response): void => {
+    res.set('Allow', 'POST, DELETE');
+    res.status(405).json({
+      jsonrpc: '2.0',
+      error: { code: -32000, message: 'Method not allowed.' },
+      id: null,
+    });
+  });
   app.delete('/mcp', ...auth, handler);
 }

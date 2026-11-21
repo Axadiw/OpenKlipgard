@@ -27,6 +27,7 @@ import {
   pipeS3IntoSink,
   pipeThrottleToResponse,
   attachSlowConsumerMonitor,
+  isClientAbort,
   SLOW_CONSUMER_ERROR_MESSAGE,
 } from '../../utils/s3Stream.js';
 import { getCachedMdat, buildMdatCacheKey } from '../../utils/mdatCache.js';
@@ -721,6 +722,9 @@ videoRouter.get('/:id/video/:view/original', requireUnlockedAccount, mediaRateLi
     const message = err instanceof Error ? err.message : 'Unknown';
     if (message === SLOW_CONSUMER_ERROR_MESSAGE) {
       console.log('Original download: slow consumer kill completed, S3 socket released');
+    } else if (isClientAbort(err)) {
+      // [API-EVENTS-296] The client closed the connection mid-body.
+      console.log('Original download: client closed the connection before the end');
     } else {
       console.error('Original download error:', message);
     }
@@ -1326,6 +1330,9 @@ videoRouter.get('/:id/video/:view', requireUnlockedAccount, mediaRateLimit, vide
     // itself remains visible in stdout via the warn-renamed-to-log above.
     if (message === SLOW_CONSUMER_ERROR_MESSAGE) {
       console.log('Video streaming: slow consumer kill completed, S3 socket released');
+    } else if (isClientAbort(err)) {
+      // [API-EVENTS-296] The client closed the connection mid-body.
+      console.log('Video streaming: client closed the connection before the end');
     } else {
       console.error('Video streaming error:', message);
     }

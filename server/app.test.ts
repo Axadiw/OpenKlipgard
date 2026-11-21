@@ -68,4 +68,15 @@ describe('self-hosted edition', () => {
       if (!path.startsWith('/api/v0/account')) expect(res.status, `${method} ${path}`).toBe(404);
     }
   });
+
+  it('[API-CORE-018] answers an unmatched path with a JSON 404 that names no framework', async () => {
+    for (const [method, path] of [['get', '/nonexistent'], ['get', '/api/v0/nonexistent'], ['post', '/api/v0/nonexistent']] as const) {
+      const res = await request(app)[method](path).send({});
+      expect(res.status, `${method} ${path}`).toBe(404);
+      expect(res.headers['content-type'], `${method} ${path}`).toMatch(/^application\/json/);
+      expect(res.body, `${method} ${path}`).toEqual({ error: 'NOT_FOUND' });
+      expect(res.text, `${method} ${path}`).not.toMatch(/Cannot (GET|POST)/);
+      expect(res.headers['x-powered-by'], `${method} ${path}`).toBeUndefined();
+    }
+  });
 });

@@ -5,6 +5,7 @@ import { useInView } from '../hooks/useInView';
 import { AuthImage } from './AuthImage';
 import { RelativeTime } from './RelativeTime';
 import { ViewIcon } from './ViewIcon';
+import { cameraBadgeStyle } from '../lib/cameraColors';
 import { formatEventDateTime, formatEventTime, intlLocale, relativeEventDay, formatDuration } from '../utils/format';
 import { useAccountTimezone } from '../hooks/useAccountTimezone';
 import type { CameraEvent, ViewId } from '../types';
@@ -104,7 +105,7 @@ function EventCardInner({ event, onPlay, onDelete, cameraColor }: Props) {
       </div>
       <div className="event-bottom">
         <div className="event-info">
-          <span className="camera-badge" style={{ background: cameraColor }}>{event.camera}</span>
+          <span className="camera-badge" style={cameraBadgeStyle(cameraColor)}>{event.camera}</span>
           <span className="event-time" title={fullTime}>{clockTime}{isTodayEvent && <span className="time-ago"> (<RelativeTime timestamp={event.timestamp} timezone={event.timezone} />)</span>}</span>
         </div>
         <div className="event-actions">

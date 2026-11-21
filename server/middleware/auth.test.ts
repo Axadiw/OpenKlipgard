@@ -93,6 +93,44 @@ describe('requireAuth', () => {
     expect(res.status).toBe(401);
     expect(mockGetSessionAuthState).not.toHaveBeenCalled();
   });
+
+  // [API-CORE-040] A token of another kind (e.g. an OAuth signup ticket) once
+  // reached GET /events as a Bearer with userId undefined.
+  it('refuses a token of a kind the session flow never issues (OAuth signup ticket)', async (ctx) => {
+    story(ctx, 'Bilet rejestracji przez Google/Apple wysłany jako Bearer jest odrzucany — nie jest tokenem sesji żadnego konta.');
+    mockVerifyToken.mockReturnValue({ kind: 'oauth-signup', provider: 'google', subject: '1', email: 'x@test.com' });
+
+    const res = await request(app).get('/probe').set('Authorization', 'Bearer t');
+
+    expect(res.status).toBe(401);
+    expect(res.body).toEqual({ error: 'Wrong token kind' });
+    expect(mockGetTokenGeneration).not.toHaveBeenCalled();
+  });
+
+  it('refuses an access-kind token that names no account', async (ctx) => {
+    story(ctx, 'Token bez identyfikatora konta (lub z nienumerycznym) nie przechodzi, nawet jeśli ma poprawny podpis.');
+    for (const p of [
+      { kind: 'access', email: 'a@test.com' },
+      { ...base, userId: undefined },
+      { ...base, userId: '7' },
+      { ...base, userUuid: undefined },
+      { userId: 7, userUuid: 'u-7' , kind: 'unknown' },
+    ]) {
+      mockVerifyToken.mockReturnValue(p);
+      const res = await request(app).get('/probe').set('Authorization', 'Bearer t');
+      expect(res.status).toBe(401);
+    }
+  });
+
+  it('still accepts a token without a kind claim as an access token', async (ctx) => {
+    story(ctx, 'Token bez pola kind nadal liczy się jako access token konta.');
+    const { kind: _k, ...noKind } = base;
+    mockVerifyToken.mockReturnValue(noKind);
+
+    const res = await request(app).get('/probe').set('Authorization', 'Bearer t');
+
+    expect(res.status).toBe(200);
+  });
 });
 
 function createMediaApp() {

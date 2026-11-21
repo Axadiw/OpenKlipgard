@@ -3,7 +3,7 @@ import { eq, and, sql, isNull, isNotNull } from 'drizzle-orm';
 import { db, withTx, LOCK_NS_QUOTA, userLockKey } from '../index.js';
 import {
   uploadEvents, storageReconciliationRuns, storageDiskCorrections, storageOrphanObjects,
-  userScanState, users, plans, contentDeletions,
+  userScanState, users, plans, contentDeletions, userObjectCounts,
   type StorageOrphanObject,
 } from '../schema/index.js';
 import type { UserQuota } from '../../types.js';
@@ -781,4 +781,46 @@ export async function resetUserContentQuota(internalId: number): Promise<void> {
       uploadLifetimeBytes: 0,
     })
     .where(eq(users.id, internalId));
+}
+
+// ==== Per-account object count (DATA-154) ====
+
+/**
+ * Record how many objects the reconciler listed for one account. `partial`
+ * is set when the listing stopped early (DATA-153); the count is then a lower
+ * bound.
+ */
+export async function recordUserObjectCount(
+  userId: number,
+  objectCount: number,
+  ceiling: number,
+  partial: 'ceiling' | 'time' | null,
+): Promise<void> {
+  await db
+    .insert(userObjectCounts)
+    .values({ userId, objectCount, ceiling, partial })
+    .onConflictDoUpdate({
+      target: userObjectCounts.userId,
+      set: { objectCount, ceiling, partial, countedAt: sql`now()` },
+    });
+}
+
+export interface UserObjectCountRow {
+  userId: number;
+  objectCount: number;
+  ceiling: number;
+  partial: 'ceiling' | 'time' | null;
+  countedAt: Date;
+}
+
+/** Every recorded count, for the admin usage view. */
+export async function getAllUserObjectCounts(): Promise<UserObjectCountRow[]> {
+  const rows = await db.select().from(userObjectCounts);
+  return rows.map(r => ({
+    userId: r.userId,
+    objectCount: r.objectCount,
+    ceiling: r.ceiling,
+    partial: r.partial === 'ceiling' || r.partial === 'time' ? r.partial : null,
+    countedAt: r.countedAt,
+  }));
 }

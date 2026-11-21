@@ -8,6 +8,7 @@ import {
   parseTkhd,
   parseMdhd,
   type BoxHeader,
+  assertBoxReadWithinCeiling,
 } from './boxes.js';
 import { MAX_FRAGMENTS, type RangeFetcher } from './fragmentIndex.js';
 import { readHdlrType, fixAudioSampleDurations, fixVideoSampleDurations, AAC_FRAME_SAMPLES } from './audioStts.js';
@@ -83,6 +84,7 @@ async function fetchBox(
   const header = readBoxHeader(hdrBuf, 0);
   if (!header || header.size <= 0) return null;
   if (absStart + header.size > fileSize) return null;
+  assertBoxReadWithinCeiling(header.size, `fetchBox (box at offset ${absStart})`);
   const buf = await fetchRange(absStart, absStart + header.size - 1);
   return { header, buf };
 }

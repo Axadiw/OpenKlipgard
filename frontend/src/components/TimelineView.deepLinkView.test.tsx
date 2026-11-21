@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import { renderWithRouter } from '../test-utils';
+// Imported statically on purpose: a cold import inside a test spends that
+// test's time limit on transforming the whole TimelineView tree, and on a
+// loaded runner that alone can time a test out.
+import { TimelineView } from './TimelineView';
 import { story } from '../test-story';
 import type { CameraEvent } from '../types';
 
@@ -88,7 +92,6 @@ describe('TimelineView deep-link view resolution', () => {
     // The view seeds its window from `window.location.search` directly (not
     // from the router), so MemoryRouter's entry alone wouldn't reach it.
     window.history.replaceState({}, '', '/timeline?event=ev-dual&view=wide');
-    const { TimelineView } = await import('./TimelineView');
     renderWithRouter(
       <TimelineView cameraFilter={[]} onPlay={() => {}} allCameras={['Front']} />,
       { route: '/timeline?event=ev-dual&view=wide' },
@@ -104,7 +107,6 @@ describe('TimelineView deep-link view resolution', () => {
     const { ApiError } = await import('../api');
     getEvent.mockRejectedValue(new ApiError('boom', 500));
     window.history.replaceState({}, '', '/timeline?event=ev-transient&view=00');
-    const { TimelineView } = await import('./TimelineView');
     renderWithRouter(
       <TimelineView cameraFilter={[]} onPlay={() => {}} allCameras={['Front']} />,
       { route: '/timeline?event=ev-transient&view=00' },

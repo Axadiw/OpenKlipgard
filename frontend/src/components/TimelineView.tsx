@@ -22,7 +22,7 @@ import { useAccountTimezone } from '../hooks/useAccountTimezone';
 import { useVideoStallRetry } from '../hooks/useVideoStallRetry';
 import { usePlaybackBeacon } from '../hooks/usePlaybackBeacon';
 import { useScrubCacheLifetime } from '../hooks/useScrubCacheLifetime';
-import { paletteForCameras } from '../lib/cameraColors';
+import { cameraBadgeStyle, paletteForCameras } from '../lib/cameraColors';
 import { parseTimelineUrlParams, serializeInlineVideoToParams, clampSeekToDuration } from './timelineUrlState';
 import { dayViewForTimestamp, dayViewForDateStr } from './timelineDayView';
 import { computeBufferOverlay } from '../lib/bufferOverlayMath';
@@ -1861,7 +1861,7 @@ export function TimelineView({ cameraFilter, onPlay: _onPlay, allCameras }: Prop
         {inlineVideo ? (
           <>
             <div className="timeline-inline-player-header">
-              <span className="camera-badge" style={{ background: cameraColorMap.get(inlineVideo.event.camera) }}>
+              <span className="camera-badge" style={cameraBadgeStyle(cameraColorMap.get(inlineVideo.event.camera))}>
                 {inlineVideo.event.camera}
               </span>
               {overlappingSiblings.length > 1 && (

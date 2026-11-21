@@ -50,6 +50,7 @@ vi.mock('../db/queries/storage.js', () => ({
   getOrphansOlderThan: vi.fn(),
   deleteOrphanObjectRow: vi.fn(),
   withUserAdvisoryLock: vi.fn(),
+  recordUserObjectCount: vi.fn(),
 }));
 vi.mock('../db/queries/users.js', () => ({
   getUserByUuid: vi.fn(),

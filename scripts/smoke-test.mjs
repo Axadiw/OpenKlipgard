@@ -169,6 +169,47 @@ async function waitHealthy(timeoutMs = 600_000) {
   }
 }
 
+// The thumbnail worker reads its jobs from this stream, as a member of this group.
+const WORKER_STREAM = 'stream:thumbnail';
+const WORKER_GROUP = 'thumbnail-workers';
+
+/**
+ * How many consumers the thumbnail worker's group has, from the output of
+ * `redis-cli --raw XINFO GROUPS stream:thumbnail`: every group is a run of
+ * name/value lines (a value Redis has not got is an empty line, so the pairs
+ * stay in step). 0 while the stream or the group does not exist yet.
+ */
+export function workerConsumers(text) {
+  const lines = text.split('\n').map((l) => l.trim());
+  for (let i = 0; i + 1 < lines.length; i++) {
+    if (lines[i] !== 'name' || lines[i + 1] !== WORKER_GROUP) continue;
+    for (let j = i + 2; j + 1 < lines.length && lines[j] !== 'name'; j += 2) {
+      if (lines[j] === 'consumers') return Number(lines[j + 1]) || 0;
+    }
+  }
+  return 0;
+}
+
+/**
+ * Wait until the thumbnail worker is reading its stream.
+ *
+ * `docker compose up` returns when the containers have started, not when the
+ * worker reads. A new stack has no consumer group yet: the worker creates it at
+ * the end of the stream, so a job published before that is never handed to it,
+ * and the redrive does not publish the job again until the ten-minute guard
+ * against duplicates has run out. A recording uploaded in the first seconds
+ * would not show up in the grid in the time the checks allow.
+ */
+async function waitForWorker(dir, timeoutMs = 120_000) {
+  const until = Date.now() + timeoutMs;
+  for (;;) {
+    const groups = compose(dir, 'exec', '-T', 'redis', 'redis-cli', '--raw', 'XINFO', 'GROUPS', WORKER_STREAM);
+    if (workerConsumers(groups.out) > 0) return;
+    if (Date.now() > until) fail(`the thumbnail worker did not start reading ${WORKER_STREAM} in time`);
+    await sleep(500);
+  }
+}
+
 async function login(password = SETTINGS.ACCOUNT_PASSWORD) {
   const res = await api('POST', '/api/v0/auth/login', { body: { email: SETTINGS.ACCOUNT_EMAIL, password } });
   if (!res.ok) fail(`login failed: HTTP ${res.status} ${await res.text()}`);
@@ -246,6 +287,60 @@ async function expectCleanPlayable(token, event) {
 
 function teardown(dir) {
   compose(dir, 'down', '-v', '--remove-orphans');
+}
+
+// ── what a failed run prints ───────────────────────────────────────────────
+// The tracing of the FTP server alone fills a log tail with lines of 1.5 KB, so
+// one tail of all services showed nothing of the others. Every service gets
+// its own short tail, with its long lines cut.
+
+const COLOUR_CODES = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g');
+
+/** The last `count` non-empty lines of `text`, without colour codes, each cut to `width` characters. */
+export function tailLines(text, count, width) {
+  return text.replace(COLOUR_CODES, '').split('\n').map((l) => l.trimEnd()).filter(Boolean).slice(-count)
+    .map((l) => (l.length > width ? `${l.slice(0, width - 1)}…` : l)).join('\n');
+}
+
+/**
+ * The entries in the output of `redis-cli --raw XRANGE …`, one line each, with
+ * the time that the entry's id carries (its first part is milliseconds since
+ * 1970), so they can be read against the time stamps of the logs.
+ */
+export function streamEntries(text) {
+  const entries = [];
+  for (const raw of text.split('\n')) {
+    const line = raw.trim();
+    if (/^\d{10,}-\d+$/.test(line)) entries.push([`${line} (${new Date(Number(line.split('-')[0])).toISOString()})`]);
+    else if (entries.length > 0 && line) entries[entries.length - 1].push(line);
+  }
+  return entries.map((parts) => parts.join(' '));
+}
+
+/** The stack the checks are running against now: the previous release first, then this tree. */
+let stackDir = ROOT;
+
+/** What it takes to understand a failed run: the containers, the end of each log, the job queue and the recordings' state. */
+function describeStack(dir) {
+  const sections = [];
+  const section = (title, body) => sections.push(`\n── ${title} ──\n${body || '(nothing)'}`);
+  const redis = (...a) => compose(dir, 'exec', '-T', 'redis', 'redis-cli', '--raw', ...a).out.trim();
+
+  section('containers', tailLines(compose(dir, 'ps', '-a', '--format', 'table {{.Service}}\t{{.Status}}').out, 20, 160));
+  for (const service of ['klipgard-api', 'klipgard-thumbnail-worker', 'klipgard-scheduler', 'klipgard-ftps', 'klipgard-db', 'minio', 'redis']) {
+    section(`${service}, end of the log`,
+      tailLines(compose(dir, 'logs', '--no-color', '--no-log-prefix', '--timestamps', '--tail', '40', service).out, 25, 240));
+  }
+  const keys = redis('--scan', '--pattern', 'thumbnail-published:*').split('\n').filter(Boolean).slice(0, 5);
+  section(`${WORKER_STREAM}, its group and the guards against duplicate jobs`, [
+    `groups: ${redis('XINFO', 'GROUPS', WORKER_STREAM).split('\n').join(' ')}`,
+    ...streamEntries(redis('XRANGE', WORKER_STREAM, '-', '+', 'COUNT', '5')).map((entry) => `entry ${entry}`),
+    ...keys.map((key) => `${key} expires in ${redis('TTL', key)} s`),
+  ].join('\n'));
+  section('recordings by processing state',
+    tailLines(compose(dir, 'exec', '-T', 'klipgard-db', 'psql', '-U', 'klipgard', '-d', 'klipgard', '-At', '-c',
+      'select processing_state, count(*) from file_metadata group by 1').out, 10, 160));
+  return sections.join('\n');
 }
 
 // ── scenarios ──────────────────────────────────────────────────────────────
@@ -389,6 +484,7 @@ async function freshInstall() {
   teardown(ROOT);
   composeOk(ROOT, 'up', '-d', '--build');
   await waitHealthy();
+  await waitForWorker(ROOT);
   ok('the stack is up');
 
   const { event } = await checkInstall(ROOT);
@@ -412,14 +508,17 @@ async function upgradeFrom(ref) {
   spawnSync('git', ['worktree', 'remove', '--force', prev], { cwd: ROOT });
   execFileSync('git', ['worktree', 'add', '--detach', prev, ref], { cwd: ROOT, stdio: 'inherit' });
   teardown(prev);
+  stackDir = prev;
   composeOk(prev, 'up', '-d', '--build');
   await waitHealthy();
+  await waitForWorker(prev);
   let token = await login();
   cameraUpload('Driveway');
   const event = await waitForPlayableEvent(token, 'Driveway');
   await expectPlayable(token, event);
 
   log('upgrade to this version (same data, same configuration)');
+  stackDir = ROOT;
   composeOk(ROOT, 'up', '-d', '--build', '--remove-orphans');
   await sleep(5000);
   await waitHealthy();
@@ -450,7 +549,7 @@ async function main() {
   } catch (err) {
     failed = true;
     console.error(`\nSMOKE TEST FAILED: ${err.message}`);
-    console.error(compose(ROOT, 'logs', '--tail', '60', 'klipgard-api', 'klipgard-ftps', 'klipgard-thumbnail-worker').out.slice(-8000));
+    try { console.error(describeStack(stackDir)); } catch (e) { console.error(`(could not describe the stack: ${e.message})`); }
   } finally {
     if (!KEEP) { teardown(ROOT); rmSync(WORK, { recursive: true, force: true }); }
   }

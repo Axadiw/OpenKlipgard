@@ -11,8 +11,10 @@
  * RegexTimeoutError, and respawn a fresh worker for the next job. Built-in,
  * hardcoded profiles are trusted and never come through here.
  *
- * Jobs are serialized through a single worker (one in-flight match at a time),
- * which is all the scanner and the /camera-profiles/test endpoint need.
+ * Jobs are serialized through a single worker (one in-flight match at a time).
+ * Two bounded queues feed it: ingest work first, user-triggered previews only
+ * when no ingest job waits (API-CORE-117). A job's wall clock starts when the
+ * worker is ready, never at thread start-up.
  */
 import { Worker } from 'node:worker_threads';
 
@@ -35,7 +37,9 @@ export const MAX_UNTRUSTED_INPUT = 1024;
 const TIMEOUT_MS = Math.max(20, Number(process.env.UNTRUSTED_REGEX_TIMEOUT_MS) || 500);
 
 // CommonJS worker body (Node runs `eval:true` worker code as CJS). Kept inline
-// so it ships with the compiled bundle without a separate copied file.
+// so it ships with the compiled bundle without a separate copied file. It
+// announces `ready` once its message handler exists, so the wall clock of a job
+// never includes thread start-up (slow on a loaded CI runner).
 const WORKER_SRC = `
 const { parentPort } = require('node:worker_threads');
 parentPort.on('message', (m) => {
@@ -51,32 +55,72 @@ parentPort.on('message', (m) => {
     parentPort.postMessage({ ok: false, error: e && e.message ? String(e.message) : String(e) });
   }
 });
+parentPort.postMessage({ ready: true });
 `;
+
+/** API-CORE-117: queue limits. Ingest work (the default) has priority over
+ *  interactive work (the pattern preview); both are bounded. */
+export const REGEX_MAX_PENDING = Math.max(1, Number(process.env.UNTRUSTED_REGEX_MAX_PENDING) || 256);
+export const REGEX_MAX_PENDING_INTERACTIVE = Math.max(1, Number(process.env.UNTRUSTED_REGEX_MAX_PENDING_INTERACTIVE) || 32);
+export const REGEX_MAX_PENDING_PER_USER = Math.max(1, Number(process.env.UNTRUSTED_REGEX_MAX_PENDING_PER_USER) || 2);
+const WORKER_START_GUARD_MS = 10_000;
+
+/** The queue is full, or the caller holds too many jobs. The caller answers 429. */
+export class RegexQueueFullError extends Error {
+  constructor(msg = 'regex queue is full') {
+    super(msg);
+    this.name = 'RegexQueueFullError';
+  }
+}
+
+export interface UntrustedExecOptions {
+  /** `interactive` = a user-triggered preview. It runs only when no ingest job waits. Default `ingest`. */
+  priority?: 'ingest' | 'interactive';
+  /** Account id. With `interactive`, bounds the pending + running jobs of one account. */
+  userKey?: string;
+}
 
 export interface UntrustedMatch {
   matched: boolean;
   groups: Record<string, string> | null;
 }
 
-interface Job extends UntrustedMatchRequest {
-  resolve: (v: UntrustedMatch) => void;
-  reject: (e: Error) => void;
-}
 interface UntrustedMatchRequest {
   source: string;
   flags: string;
   input: string;
 }
+interface Job extends UntrustedMatchRequest {
+  interactive: boolean;
+  userKey?: string;
+  resolve: (v: UntrustedMatch) => void;
+  reject: (e: Error) => void;
+}
 
 let worker: Worker | null = null;
+let workerReady = false;
 let active: Job | null = null;
 let timer: ReturnType<typeof setTimeout> | null = null;
-const queue: Job[] = [];
+const queueHigh: Job[] = [];
+const queueLow: Job[] = [];
+const userJobs = new Map<string, number>();
+
+function pendingTotal(): number {
+  return queueHigh.length + queueLow.length + (active ? 1 : 0);
+}
+
+function finish(job: Job): void {
+  if (job.interactive && job.userKey) {
+    const n = (userJobs.get(job.userKey) ?? 0) - 1;
+    if (n > 0) userJobs.set(job.userKey, n);
+    else userJobs.delete(job.userKey);
+  }
+}
 
 function spawnWorker(): Worker {
   const w = new Worker(WORKER_SRC, { eval: true });
-  w.on('message', onMessage);
-  w.on('error', onError);
+  w.on('message', (msg) => onMessage(w, msg));
+  w.on('error', (err: Error) => onError(w, err));
   // Don't keep a short-lived process (tests, CLIs) alive for this worker.
   w.unref();
   return w;
@@ -89,59 +133,135 @@ function clearTimer(): void {
   }
 }
 
-function onMessage(msg: { ok: boolean; matched?: boolean; groups?: Record<string, string> | null; error?: string }): void {
+function killWorker(w: Worker | null): void {
+  if (worker === w) {
+    worker = null;
+    workerReady = false;
+  }
+  if (w) void w.terminate().catch(() => { /* already gone */ });
+}
+
+function onMessage(
+  w: Worker,
+  msg: { ready?: boolean; ok?: boolean; matched?: boolean; groups?: Record<string, string> | null; error?: string },
+): void {
+  if (w !== worker) return; // late message from a worker we already killed
+  if (msg.ready) {
+    workerReady = true;
+    dispatch();
+    return;
+  }
   const job = active;
-  if (!job) return; // late message from a worker we already moved past
+  if (!job) return;
   clearTimer();
   active = null;
+  finish(job);
   if (msg.ok) job.resolve({ matched: !!msg.matched, groups: msg.groups ?? null });
   else job.reject(new Error(msg.error || 'regex error'));
   pump();
 }
 
-function onError(err: Error): void {
+function onError(w: Worker, err: Error): void {
+  if (w !== worker) return;
   const job = active;
-  worker = null; // crashed — respawn lazily on next job
+  killWorker(w); // crashed — respawn lazily on next job
   clearTimer();
   active = null;
-  if (job) job.reject(err);
+  if (job) {
+    finish(job);
+    job.reject(err);
+  }
   pump();
 }
 
-function pump(): void {
-  if (active || queue.length === 0) return;
-  const job = queue.shift()!;
-  active = job;
-  if (!worker) worker = spawnWorker();
+/** Send the active job to a ready worker and start its wall clock. */
+function dispatch(): void {
+  const job = active;
+  if (!job || !worker || !workerReady) return;
+  clearTimer();
+  const w = worker;
   timer = setTimeout(() => {
     // Hard timeout: the match is stuck in catastrophic backtracking. Kill the
     // worker outright (terminate is the only way to stop a sync regex), reject,
-    // and let pump() spawn a fresh worker for the next job.
-    const stuck = worker;
-    worker = null;
-    active = null;
+    // and let pump() spawn a fresh worker for the next job. The next job waits
+    // for the new worker's `ready`, which is not part of its budget.
     timer = null;
-    if (stuck) void stuck.terminate().catch(() => { /* already gone */ });
+    active = null;
+    killWorker(w);
+    finish(job);
     job.reject(new RegexTimeoutError());
     pump();
   }, TIMEOUT_MS);
   // Let the timer not hold the event loop open on its own.
   (timer as { unref?: () => void }).unref?.();
-  worker.postMessage({ source: job.source, flags: job.flags, input: job.input });
+  w.postMessage({ source: job.source, flags: job.flags, input: job.input });
+}
+
+function pump(): void {
+  if (active) return;
+  const job = queueHigh.shift() ?? queueLow.shift();
+  if (!job) return;
+  active = job;
+  if (!worker) {
+    worker = spawnWorker();
+    workerReady = false;
+    const w = worker;
+    // A worker that never reports ready is broken: fail the job, do not hang.
+    clearTimer();
+    timer = setTimeout(() => {
+      timer = null;
+      if (worker !== w || workerReady) return;
+      const stuck = active;
+      active = null;
+      killWorker(w);
+      if (stuck) {
+        finish(stuck);
+        stuck.reject(new Error('regex worker did not start'));
+      }
+      pump();
+    }, WORKER_START_GUARD_MS);
+    (timer as { unref?: () => void }).unref?.();
+    return;
+  }
+  dispatch();
 }
 
 /**
  * Execute an untrusted regex against `input` under a hard timeout in a worker
  * thread. Resolves with the match result, or rejects with RegexTimeoutError if
  * the match exceeds the budget (the caller should disable the offending
- * profile). Over-long inputs short-circuit to "no match".
+ * profile). Over-long inputs short-circuit to "no match". Rejects with
+ * RegexQueueFullError when a queue limit holds (API-CORE-117).
  */
-export function safeRegexExec(source: string, flags: string, input: string): Promise<UntrustedMatch> {
+export function safeRegexExec(
+  source: string,
+  flags: string,
+  input: string,
+  opts: UntrustedExecOptions = {},
+): Promise<UntrustedMatch> {
   if (input.length > MAX_UNTRUSTED_INPUT) {
     return Promise.resolve({ matched: false, groups: null });
   }
+  const interactive = opts.priority === 'interactive';
+  if (pendingTotal() >= REGEX_MAX_PENDING) {
+    return Promise.reject(new RegexQueueFullError());
+  }
+  if (interactive) {
+    if (queueLow.length >= REGEX_MAX_PENDING_INTERACTIVE) {
+      return Promise.reject(new RegexQueueFullError());
+    }
+    if (opts.userKey) {
+      const n = userJobs.get(opts.userKey) ?? 0;
+      if (n >= REGEX_MAX_PENDING_PER_USER) {
+        return Promise.reject(new RegexQueueFullError('too many pending pattern tests for this account'));
+      }
+      userJobs.set(opts.userKey, n + 1);
+    }
+  }
   return new Promise<UntrustedMatch>((resolve, reject) => {
-    queue.push({ source, flags, input, resolve, reject });
+    (interactive ? queueLow : queueHigh).push({
+      source, flags, input, interactive, userKey: interactive ? opts.userKey : undefined, resolve, reject,
+    });
     pump();
   });
 }
@@ -152,7 +272,11 @@ export function safeRegexExec(source: string, flags: string, input: string): Pro
  * under the same worker timeout. Returns a human-readable reason if the regex
  * is unsafe, or null if it passed.
  */
-export async function assertUntrustedRegexSafe(source: string, flags = 'i'): Promise<string | null> {
+export async function assertUntrustedRegexSafe(
+  source: string,
+  flags = 'i',
+  opts: UntrustedExecOptions = {},
+): Promise<string | null> {
   try {
     new RegExp(source, flags);
   } catch (e) {
@@ -170,7 +294,7 @@ export async function assertUntrustedRegexSafe(source: string, flags = 'i'): Pro
   ];
   for (const probe of probes) {
     try {
-      await safeRegexExec(source, flags, probe);
+      await safeRegexExec(source, flags, probe, opts);
     } catch (e) {
       if (e instanceof RegexTimeoutError) {
         return 'regex is too slow on adversarial input (possible catastrophic backtracking)';
@@ -205,7 +329,10 @@ export async function _shutdownRegexWorker(): Promise<void> {
   clearTimer();
   const w = worker;
   worker = null;
+  workerReady = false;
   active = null;
-  queue.length = 0;
+  queueHigh.length = 0;
+  queueLow.length = 0;
+  userJobs.clear();
   if (w) await w.terminate().catch(() => { /* already gone */ });
 }

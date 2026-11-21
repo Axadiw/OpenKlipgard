@@ -1140,6 +1140,7 @@ mod tests {
             internal_api_url: String::new(),
             internal_api_key: String::new(),
             redis_url: String::new(),
+            max_global_uploads: 1,
         };
         S3::new(&config)
     }

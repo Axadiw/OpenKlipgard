@@ -283,8 +283,27 @@ const SLOW_CONSUMER_KILL_ENABLED = (process.env.ENABLE_SLOW_CONSUMER_KILL ?? 'tr
 
 const noop = (): void => undefined;
 
-function prematureCloseError(): Error {
-  return Object.assign(new Error('Premature close'), { code: 'ERR_STREAM_PREMATURE_CLOSE' });
+const CLIENT_ABORT = Symbol('klipgard.clientAbort');
+
+/**
+ * The response closed before it finished: the client went away. Node gives a
+ * source that closes early the same `Premature close` message and code, so
+ * the mark, not the code, is what tells the two apart.
+ */
+function clientAbortError(): Error {
+  return Object.assign(new Error('Premature close'), {
+    code: 'ERR_STREAM_PREMATURE_CLOSE',
+    [CLIENT_ABORT]: true,
+  });
+}
+
+/**
+ * [API-EVENTS-296] True when `pipeS3ToResponse` rejected because the client
+ * closed the connection mid-body. Routes log that at info level, so it never
+ * becomes an error report; a source failure is never marked.
+ */
+export function isClientAbort(err: unknown): boolean {
+  return err instanceof Error && (err as Error & { [CLIENT_ABORT]?: boolean })[CLIENT_ABORT] === true;
 }
 
 /**
@@ -338,7 +357,7 @@ export function pipeS3ToResponse(
     const onResClose = (): void => {
       // `close` after `finish` is the normal end; `close` without it is a
       // client abort (or a socket torn down under us).
-      settle(res.writableFinished ? null : prematureCloseError());
+      settle(res.writableFinished ? null : clientAbortError());
     };
     const onResError = (err: Error): void => settle(err);
 
@@ -374,7 +393,7 @@ export function pipeS3ToResponse(
     }
 
     if (res.destroyed || res.writableEnded) {
-      settle(prematureCloseError());
+      settle(clientAbortError());
       return;
     }
 

@@ -36,6 +36,21 @@ export const storageReconciliationRuns = pgTable('storage_reconciliation_runs', 
 });
 
 // ---------------------------------------------------------------------------
+// user_object_counts — objects the reconciler saw per account (DATA-154)
+// ---------------------------------------------------------------------------
+export const userObjectCounts = pgTable('user_object_counts', {
+  userId: integer('user_id')
+    .primaryKey()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  objectCount: integer('object_count').notNull(),
+  ceiling: integer('ceiling').notNull(),
+  // null = complete listing; 'ceiling' | 'time' = the listing stopped early
+  // (DATA-153) and object_count is a lower bound.
+  partial: text('partial'),
+  countedAt: timestamp('counted_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+// ---------------------------------------------------------------------------
 // storage_disk_corrections — per-user disk-usage correction audit rows
 // ---------------------------------------------------------------------------
 export const storageDiskCorrections = pgTable(

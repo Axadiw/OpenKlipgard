@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { Buffer } from 'buffer';
 import { indexFragmentedMp4, MAX_FRAGMENTS, type RangeFetcher } from './fragmentIndex.js';
 import { box, makeFtyp, makeMoov, makeMoofMdat } from './__test-fixtures.js';
+import { MAX_BOX_READ_BYTES } from './boxes.js';
 import { story } from '../../testing/story.js';
 
 describe('indexFragmentedMp4 (corrupt-fragment guard)', () => {
@@ -177,5 +178,30 @@ describe('indexFragmentedMp4 (allocation guards — crafted-MP4 OOM defense)', (
 
     const index = await indexFragmentedMp4(file, file.length, fetcher, 100);
     expect(index.fragments.length).toBe(3);
+  });
+});
+
+describe('indexFragmentedMp4 (hostile moof size — [WORKER-123])', () => {
+  it('throws without requesting a range above the ceiling for a moof declaring 1.5e9 bytes', async (ctx) => {
+    story(ctx, 'Atakujący deklaruje w nagłówku moof 1.5 GB; indeks nie może zlecić odczytu tej wielkości (OOM thumbnail-workera), tylko rzucić błąd.');
+    const ftyp = makeFtyp();
+    const moov = makeMoov({
+      mvhdTimescale: 1000, mvhdDuration: 0,
+      tracks: [{ id: 1, mdhdTimescale: 90000 }],
+      withMvex: true, withMehd: false,
+      trexDefaults: [{ trackId: 1, defaultSampleDuration: 3000 }],
+    });
+    const hostile = Buffer.alloc(16);
+    hostile.writeUInt32BE(1_500_000_000, 0);
+    hostile.write('moof', 4, 'ascii');
+    const head = Buffer.concat([ftyp, moov, hostile]);
+    const fileSize = 2_000_000_000;
+    const requested: number[] = [];
+    const fetcher: RangeFetcher = async (start, end) => {
+      requested.push(end - start + 1);
+      return Buffer.alloc(Math.min(end - start + 1, 64));
+    };
+    await expect(indexFragmentedMp4(head, fileSize, fetcher)).rejects.toThrow(/MAX_BOX_READ_BYTES/);
+    expect(Math.max(0, ...requested)).toBeLessThanOrEqual(MAX_BOX_READ_BYTES);
   });
 });

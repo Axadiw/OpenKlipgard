@@ -13,6 +13,7 @@ import type { CameraProfileMode, IconKind } from '../types.js';
 import {
   assertUntrustedRegexSafe,
   safeRegexExec,
+  RegexQueueFullError,
   RegexTimeoutError,
   MAX_UNTRUSTED_INPUT,
   MISSING_GROUPS_MESSAGE,
@@ -182,7 +183,20 @@ router.post('/camera-profiles/custom', async (req, res) => {
     // Reject catastrophic-backtracking (ReDoS) regexes before they are stored —
     // a custom profile's regex later runs against attacker-controlled S3
     // filenames in the event-manager. See server/services/untrustedRegex.ts.
-    const unsafeReason = await assertUntrustedRegexSafe(body.regex, 'i');
+    let unsafeReason: string | null;
+    try {
+      unsafeReason = await assertUntrustedRegexSafe(body.regex, 'i', {
+        priority: 'interactive',
+        userKey: req.user!.userUuid,
+      });
+    } catch (e) {
+      if (e instanceof RegexQueueFullError) {
+        res.setHeader('Retry-After', '2');
+        res.status(429).json({ error: 'Too many pattern checks in progress; retry shortly' });
+        return;
+      }
+      throw e;
+    }
     if (unsafeReason) {
       res.status(400).json({ error: unsafeReason });
       return;
@@ -272,7 +286,20 @@ router.put('/camera-profiles/custom/:id', async (req, res) => {
         res.status(400).json({ error: MISSING_GROUPS_MESSAGE });
         return;
       }
-      const unsafeReason = await assertUntrustedRegexSafe(body.regex, 'i');
+      let unsafeReason: string | null;
+    try {
+      unsafeReason = await assertUntrustedRegexSafe(body.regex, 'i', {
+        priority: 'interactive',
+        userKey: req.user!.userUuid,
+      });
+    } catch (e) {
+      if (e instanceof RegexQueueFullError) {
+        res.setHeader('Retry-After', '2');
+        res.status(429).json({ error: 'Too many pattern checks in progress; retry shortly' });
+        return;
+      }
+      throw e;
+    }
       if (unsafeReason) {
         res.status(400).json({ error: unsafeReason });
         return;
@@ -410,8 +437,16 @@ router.post('/camera-profiles/test', async (req, res) => {
     // the API event loop (ReDoS). See server/services/untrustedRegex.ts.
     let execResult;
     try {
-      execResult = await safeRegexExec(body.regex, 'i', filename);
+      execResult = await safeRegexExec(body.regex, 'i', filename, {
+        priority: 'interactive',
+        userKey: req.user!.userUuid,
+      });
     } catch (err) {
+      if (err instanceof RegexQueueFullError) {
+        res.setHeader('Retry-After', '2');
+        res.status(429).json({ error: 'Too many pattern tests in progress; retry shortly' });
+        return;
+      }
       if (err instanceof RegexTimeoutError) {
         res.status(400).json({ error: 'regex is too slow (possible catastrophic backtracking) — simplify the pattern' });
         return;

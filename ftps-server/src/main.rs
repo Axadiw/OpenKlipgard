@@ -95,8 +95,15 @@ async fn main() {
     let s3_clone = s3.clone();
     let api_clone = internal_api.clone();
     let streams_clone = streams.clone();
+    let global_uploads = Arc::new(tokio::sync::Semaphore::new(config.max_global_uploads));
+    info!(cap = config.max_global_uploads, "process-wide upload cap");
     let storage_factory = Box::new(move || {
-        KlipgardStorage::new(s3_clone.clone(), api_clone.clone(), streams_clone.clone())
+        KlipgardStorage::new(
+            s3_clone.clone(),
+            api_clone.clone(),
+            streams_clone.clone(),
+            global_uploads.clone(),
+        )
     });
 
     // Parse passive host

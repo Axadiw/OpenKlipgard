@@ -69,6 +69,11 @@ export const CONFIG = {
   jwtSecret: process.env.JWT_SECRET || '',
   // Access token: short-lived. Refresh flow keeps the session alive silently.
   accessTokenExpirySeconds: 900, // 15 min
+  // A change of how the account signs in (passkey, FTPS password, identity,
+  // first password) needs a device session signed in at most this long ago
+  // [API-CLOUD-125]. A stolen access token of an older session cannot add a
+  // sign-in method.
+  recentSignInMaxAgeSeconds: Number(process.env.RECENT_SIGN_IN_MAX_AGE_SECONDS) || 600,
   // Refresh token: long-lived. User stays signed in across restarts for 30 days.
   // tokenGeneration still invalidates both on password change / ban.
   refreshTokenExpirySeconds: 30 * 24 * 3600, // 30 days
@@ -169,4 +174,15 @@ export const CONFIG = {
   // POST /internal/notifications. Off unless KLIPGARD_NOTIFICATION_LOCKEYS is
   // "true": an app without the catalog key would show the raw key in its banner.
   notificationLocKeys: process.env.KLIPGARD_NOTIFICATION_LOCKEYS === 'true',
+
+  // DATA-153: ceiling on the objects the storage reconciler examines for ONE
+  // account in one run (recordings bucket). Bounds the in-memory key sets and
+  // the serial row upserts, so one account with millions of tiny objects or
+  // folder markers cannot stall the shared audit job. A listing that reaches
+  // it is partial: the run makes no disk-usage, event or file-row decision
+  // from it. Override: KLIPGARD_RECONCILE_MAX_OBJECTS_PER_USER.
+  reconcilerMaxObjectsPerUser: (() => {
+    const n = Number(process.env.KLIPGARD_RECONCILE_MAX_OBJECTS_PER_USER);
+    return Number.isInteger(n) && n > 0 ? n : 300_000;
+  })(),
 };

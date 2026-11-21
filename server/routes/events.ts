@@ -108,6 +108,7 @@ export function endStreamWithError(res: Response, err: unknown, fallbackStatus =
 
 router.get('/', async (req, res) => {
   try {
+    if (!req.user?.userId) { res.status(401).json({ error: 'Unauthorized' }); return; }
     const cursor = decodeCursor(req.query.cursor);
     const parsedLimit = parseInt(req.query.limit as string, 10);
     const MAX_LIMIT = 1000;
@@ -116,7 +117,7 @@ router.get('/', async (req, res) => {
     const cameras = req.query.camera
       ? (Array.isArray(req.query.camera) ? req.query.camera as string[] : [req.query.camera as string])
       : undefined;
-    const userId = req.user?.userId;
+    const userId = req.user.userId;
 
     // Time-filter mode. `range` = continuous datetime [from, to); anything
     // else (including missing) = daily mode with optional HH:MM mask.

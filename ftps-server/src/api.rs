@@ -705,7 +705,7 @@ mod tests {
     ///story: Połączenie z API, które FTPS trzyma w puli, wygasa wcześniej niż keep-alive nasłuchu API — dzięki temu logowanie nigdy nie idzie po połączeniu, które API właśnie zamyka (to dawało losowe 530 dla świeżego użytkownika).
     #[test]
     fn pooled_api_connection_expires_before_the_api_closes_it() {
-        assert!(API_POOL_IDLE_SECS < API_LISTENER_KEEP_ALIVE_SECS);
+        const { assert!(API_POOL_IDLE_SECS < API_LISTENER_KEEP_ALIVE_SECS) };
     }
 
     /// One-shot HTTP server for the retry tests: the first `drop_first` connections are

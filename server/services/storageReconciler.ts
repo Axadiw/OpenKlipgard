@@ -24,6 +24,7 @@ import {
   withUserAdvisoryLock,
   getUserIdsWithUnfinishedContentDeletion,
   hasUnfinishedContentDeletion,
+  recordUserObjectCount,
 } from '../db/queries/storage.js';
 import { getUserByUuid } from '../db/queries/users.js';
 import { getAllUserUuids, getAllUserUuidsAnyStatus } from '../db/queries/users.js';
@@ -167,6 +168,20 @@ export interface ReconciliationOptions {
  */
 const STEP1_ROTATION_PERIOD_MS = 6 * 3600_000;
 
+/** DATA-153 default; the real value is CONFIG.reconcilerMaxObjectsPerUser. */
+const DEFAULT_MAX_OBJECTS_PER_USER = 300_000;
+
+/** How many listed objects pass between two wall-clock checks inside a listing. */
+const STEP1_CLOCK_CHECK_EVERY = 256;
+
+/**
+ * DATA-153: with a budget, one account may use at most this share of it. A
+ * run cannot remember where a cut-short listing stopped, so without a share
+ * the same giant account would eat the whole budget again and again. With it,
+ * the accounts behind it always get the rest.
+ */
+const STEP1_USER_BUDGET_SHARE = 0.25;
+
 export async function runStorageReconciliation(
   opts: ReconciliationOptions = {},
 ): Promise<void> {
@@ -234,6 +249,8 @@ export async function runStorageReconciliation(
 
   let usersScanned = 0;
   let stepOneStoppedEarly = false;
+  let usersTruncated = 0;
+  const maxObjectsPerUser = CONFIG.reconcilerMaxObjectsPerUser || DEFAULT_MAX_OBJECTS_PER_USER;
   for (const user of scanOrder) {
     if (stepOneBudgetMs !== undefined && Date.now() - start > stepOneBudgetMs) {
       // Stop at a user boundary rather than mid-listing: each user's work is
@@ -299,7 +316,21 @@ export async function runStorageReconciliation(
       // markers stay forever. They don't count against quota (0 bytes), but
       // they pile up over time. Anything with no live siblings → orphan.
       const folderMarkers: { rel: string; key: string; size: number }[] = [];
+      // DATA-153: a listing that stops early is PARTIAL. Every decision below
+      // that reads "not in the listing" (disk total, missing event views,
+      // missing file rows, orphan markers and sidecars) is skipped for it.
+      const userStart = Date.now();
+      const userDeadline = stepOneBudgetMs === undefined
+        ? Infinity
+        : Math.min(start + stepOneBudgetMs, userStart + stepOneBudgetMs * STEP1_USER_BUDGET_SHARE);
+      let listed = 0;
+      let partial: 'ceiling' | 'time' | null = null;
       for await (const obj of listObjectsStream(CONFIG.s3RecordingsBucket, userPrefix)) {
+        if (++listed > maxObjectsPerUser) { partial = 'ceiling'; break; }
+        if (listed % STEP1_CLOCK_CHECK_EVERY === 0 && Date.now() > userDeadline) {
+          partial = 'time';
+          break;
+        }
         actualBytes += obj.size;
         const rel = obj.key.startsWith(userPrefix) ? obj.key.slice(userPrefix.length) : obj.key;
         if (rel.endsWith('/') && obj.size === 0) {
@@ -399,6 +430,30 @@ export async function runStorageReconciliation(
             );
           }
         }
+      }
+
+      // DATA-154: record what this run saw, complete or not, so the admin
+      // usage view shows an account approaching the ceiling.
+      try {
+        await recordUserObjectCount(user.id, Math.min(listed, maxObjectsPerUser), maxObjectsPerUser, partial);
+      } catch (err) {
+        console.warn(
+          `Storage reconciliation: object count write failed for user ${user.id}:`,
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+
+      if (partial !== null) {
+        usersTruncated++;
+        if (stepOneBudgetMs !== undefined && Date.now() - start > stepOneBudgetMs) {
+          stepOneStoppedEarly = true;
+        }
+        console.warn(
+          `Storage reconciliation: listing of user ${user.id} is partial ` +
+          `(${partial === 'ceiling' ? `over ${maxObjectsPerUser} objects` : 'time share spent'}) — ` +
+          'no disk, event or file-row decision made this run',
+        );
+        return true;
       }
 
       const quota = await getUserQuota(user.id);
@@ -625,6 +680,12 @@ export async function runStorageReconciliation(
       `Storage reconciliation: step 1 hit its ${Math.round((stepOneBudgetMs ?? 0) / 1000)}s time ` +
       `budget after ${usersScanned}/${users.length} user(s) — ` +
       `${users.length - usersScanned} deferred to the next run`,
+    );
+  }
+  if (usersTruncated > 0) {
+    console.warn(
+      `Storage reconciliation: step 1 left ${usersTruncated} user(s) partially listed ` +
+      `(per-user ceiling ${maxObjectsPerUser} objects or time share)`,
     );
   }
 

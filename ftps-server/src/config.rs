@@ -45,7 +45,15 @@ pub struct Config {
     // Redis — distributed locks (transfer flush) + Streams publisher
     // (scan-trigger, delete-notify).
     pub redis_url: String,
+
+    /// `MAX_GLOBAL_UPLOADS`: process-wide ceiling on in-flight uploads
+    /// (spec FTPS-165). Sized from the pod memory budget.
+    pub max_global_uploads: usize,
 }
+
+/// Default for `MAX_GLOBAL_UPLOADS`: about 60 % of the 2 GiB pod limit
+/// (1228 MiB) divided by the ~16 MiB buffer of one upload.
+pub const DEFAULT_MAX_GLOBAL_UPLOADS: usize = 76;
 
 /// Where the object-store credentials of this process came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -123,6 +131,11 @@ impl Config {
             )
             .expect("KLIPGARD_INTERNAL_API_KEY or KLIPGARD_INTERNAL_API_KEY_FILE is required"),
             redis_url: env::var("REDIS_URL").unwrap_or_else(|_| "redis://redis:6379".to_string()),
+            max_global_uploads: env::var("MAX_GLOBAL_UPLOADS")
+                .ok()
+                .and_then(|v| v.parse::<usize>().ok())
+                .filter(|v| *v > 0)
+                .unwrap_or(DEFAULT_MAX_GLOBAL_UPLOADS),
         }
     }
 }
