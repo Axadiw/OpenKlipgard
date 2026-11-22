@@ -241,6 +241,23 @@ test('the images are built with the release version, the same for every service'
   }
 });
 
+test('[ARCH-111] a service that builds its own image never pulls it, so a first start prints no pull warning', { skip }, () => {
+  // Every profile is on, so every service of the file is in the output.
+  const { ok, error, config } = composeConfig(setValues(filledExample(), { ...ACCOUNT, COMPOSE_PROFILES: 'bundled-storage,https' }));
+  assert.ok(ok, error);
+  const builders = Object.entries(config.services).filter(([, service]) => service.build).map(([name]) => name).sort();
+  // The three images are shared by these seven services. A fixed list keeps the check from passing with nothing in it.
+  assert.deepEqual(builders, [
+    'klipgard-api', 'klipgard-frontend', 'klipgard-ftps', 'klipgard-mcp',
+    'klipgard-push-worker', 'klipgard-scheduler', 'klipgard-thumbnail-worker',
+  ]);
+  for (const [name, service] of Object.entries(config.services)) {
+    // `never` for an image that is built here. The default for an image that must be pulled
+    // (Postgres, Redis, MinIO, Caddy): `never` on one of those would stop the install.
+    assert.equal(service.pull_policy === 'never', Boolean(service.build), `${name}: pull_policy ${service.pull_policy}, build ${Boolean(service.build)}`);
+  }
+});
+
 test('HTTPS is built in: the "https" profile adds the proxy on ports 80 and 443, and nothing else changes', { skip }, () => {
   const base = setValues(filledExample(), { ...ACCOUNT, PUBLIC_URL: 'https://clips.example.com' });
 
