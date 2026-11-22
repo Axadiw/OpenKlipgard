@@ -24,6 +24,10 @@ x-server: &server
     args:
       VERSION: *version
   image: openklipgard/server:local
+  # The images of this file are built from this checkout and exist on no
+  # registry. Without this line a start with no --build first tries to pull
+  # them, prints "pull access denied" and only then builds [ARCH-111].
+  pull_policy: never
   restart: unless-stopped
   cap_drop: [ALL]
   security_opt: ["no-new-privileges:true"]
@@ -70,6 +74,8 @@ services:
       args:
         VERSION: *version
     image: openklipgard/frontend:local
+    # Built here, never pulled (see x-server) [ARCH-111].
+    pull_policy: never
     restart: unless-stopped
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
@@ -150,6 +156,8 @@ services:
       context: .
       dockerfile: docker/ftps.Dockerfile
     image: openklipgard/ftps:local
+    # Built here, never pulled (see x-server) [ARCH-111].
+    pull_policy: never
     restart: unless-stopped
     # Deliberately NOT given the database password or the token secret: this
     # is the service exposed to cameras, and it only needs what is listed here.
