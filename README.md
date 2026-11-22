@@ -54,7 +54,7 @@ sign-in — and is not part of this repository.
    |---|---|
    | `ACCOUNT_EMAIL`, `ACCOUNT_PASSWORD` | Your sign-in. The password needs 12+ characters with an upper-case letter, a lower-case letter and a digit. |
    | `PUBLIC_URL` | The address you will open in the browser, e.g. `http://192.168.1.10:8080` — or `https://clips.example.com` once you turn on [HTTPS](#https-and-access-from-outside-your-network). |
-   | `FTP_HOST` | The address **cameras** use to reach this machine, e.g. `192.168.1.10`. Never `localhost`. |
+   | `FTP_HOST` | Optional. The address **cameras** use to reach this machine, e.g. `192.168.1.10`. Leave it empty when `PUBLIC_URL` is `http://` and this machine's IP address: cameras then use that address. Set it when `PUBLIC_URL` is a domain name, or when cameras reach this machine at another address. Never `localhost`. |
    | `DISK_LIMIT` | Optional, e.g. `500GB`. Empty means no limit. |
    | `ENCRYPTION_KEY`, `TOKEN_SECRET`, `DATABASE_PASSWORD`, `STORAGE_PASSWORD` | Secrets you define. The command below fills in all four. |
 
@@ -96,7 +96,10 @@ sign-in — and is not part of this repository.
 4. **Sign in** at the address you set as `PUBLIC_URL`.
 
 If something does not come up, `docker compose ps` shows which service is not
-running and `docker compose logs klipgard-api` usually says why.
+running and `docker compose logs klipgard-api` usually says why. If
+`docker compose up` stops at `init-certs`, `docker compose logs init-certs` says
+which setting in `.env` to change. Until you change it, the API and the FTP
+server stay stopped.
 
 `.env` is not tracked by git, so `git pull` never conflicts with your
 settings. If you want to add services or change something in
@@ -109,14 +112,15 @@ In the camera's FTP settings:
 
 | Field | Value |
 |---|---|
-| Server | the `FTP_HOST` address |
+| Server | the `FTP_HOST` address, or the IP address in `PUBLIC_URL` if `FTP_HOST` is empty |
 | Port | `21` (or your `FTP_PORT`) |
 | User name | your account e-mail |
 | Password | your account password |
 | Encryption | FTPS / "explicit TLS" if the camera offers it, otherwise plain FTP |
 
 Then trigger a recording. It appears in the grid within a few seconds of the
-upload finishing.
+upload finishing. Until the first recording arrives, the web app shows these
+values under **Camera FTP settings**.
 
 **Prefer FTPS.** Plain FTP sends your account password — the one you also
 sign in with — unencrypted over the network, together with the recordings.
@@ -124,9 +128,14 @@ Use it only for cameras that cannot do FTPS, on a network you trust. The FTP
 server's certificate is self-signed; cameras accept it.
 
 **If uploads fail, it is almost always passive mode.** FTP transfers open a
-second connection to the address in `FTP_HOST` on ports `30000-30099`. That
-address must be reachable from the camera, and those ports must not be
-blocked by a firewall between the camera and this machine.
+second connection to the same address, the one you gave as the server, on ports
+`30000-30099`. That address must be reachable from the camera, and those ports
+must not be blocked by a firewall between the camera and this machine.
+
+**More than one network address?** A computer with Wi-Fi and a network cable,
+or with a VPN, has several. Use the one on the network the cameras are on, and
+keep it fixed with a reservation in your router, because the cameras are set to
+it. With `FTP_HOST` empty, `PUBLIC_URL` must use that address.
 
 ### Camera support
 
@@ -198,7 +207,11 @@ Then, in `.env`:
    `PUBLIC_URL='https://clips.example.com'`.
 2. Add `https` to `COMPOSE_PROFILES`: `COMPOSE_PROFILES='bundled-storage,https'`
    (just `'https'` with [your own object storage](#your-own-object-storage)).
-3. Optionally set `WEB_PORT='127.0.0.1:8080'`, so plain HTTP is only reachable
+3. Set `FTP_HOST` to the address of this machine on the network the cameras are
+   on, for example `FTP_HOST='192.168.1.10'`. Cameras do not use the domain.
+   With `FTP_HOST` empty and a domain in `PUBLIC_URL`, `docker compose up`
+   stops and says so.
+4. Optionally set `WEB_PORT='127.0.0.1:8080'`, so plain HTTP is only reachable
    from this machine.
 
 Then run `docker compose up -d`. The first certificate usually arrives within a
@@ -225,7 +238,8 @@ of `COMPOSE_PROFILES`, and:
 
 - forward to port 8080 of this machine. The bottom of `docker-compose.yml` has
   a ready-to-adapt nginx example that goes into `docker-compose.override.yml`;
-- set `PUBLIC_URL` to the `https://` address and run `docker compose up -d`;
+- set `PUBLIC_URL` to the `https://` address and `FTP_HOST` to this machine's
+  address for the cameras, then run `docker compose up -d`;
 - serve OpenKlipgard at the root of a host name, such as
   `https://clips.example.com/`. A sub-path such as `https://example.com/clips/`
   does not work: the web app, its API calls and the MCP discovery documents
@@ -474,7 +488,8 @@ not move any recordings.
   WSL. The repository keeps the scripts that run inside the containers on LF
   line endings; a script with Windows line endings fails there.
 - **Docker Desktop (Windows, macOS)** is fine for trying OpenKlipgard out.
-  Cameras connect to the computer's network address (`FTP_HOST`), so allow
+  Cameras connect to the computer's network address (see
+  [Connect a camera](#connect-a-camera)), so allow
   ports 21 and 30000–30099 through the computer's firewall, and keep the
   computer on. Keep the recordings in the default volume: `RECORDINGS_DIR` on
   the host file system is slow there.

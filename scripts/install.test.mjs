@@ -134,6 +134,7 @@ test('bundled storage: .env.example filled in as the README says', { skip }, () 
   assert.equal(ftps.KLIPGARD_S3_ENDPOINT, 'https://minio:9000');
   assert.equal(ftps.KLIPGARD_S3_CA_BUNDLE, '/certs/ca.crt');
   assert.equal(ftps.FTP_PASV_URL, '192.168.1.10');
+  assert.equal(api.PUBLIC_FTPS_HOST, '192.168.1.10');
   const data = config.services.minio.volumes.find((v) => v.target === '/data');
   assert.deepEqual([data.type, data.source], ['volume', 'recordings']);
   assert.deepEqual(published(config.services['klipgard-frontend']), [':8080->8080']);
@@ -175,6 +176,35 @@ test('an INTERNAL_API_KEY kept in .env from an earlier release still applies', {
   assert.ok(ok, error);
   assert.equal(config.services['klipgard-api'].environment.KLIPGARD_INTERNAL_API_KEY, key);
   assert.equal(config.services['klipgard-ftps'].environment.KLIPGARD_INTERNAL_API_KEY, key);
+});
+
+test('[ARCH-108] .env.example ships FTP_HOST empty, so PUBLIC_URL decides', () => {
+  assert.match(ENV_EXAMPLE, /^FTP_HOST=''$/m);
+});
+
+test('[ARCH-108] an FTP_HOST that is set goes to the API, the FTP server and init-certs', { skip }, () => {
+  const { ok, error, config } = composeConfig(setValues(filledExample(), ACCOUNT));
+  assert.ok(ok, error);
+  assert.equal(config.services['klipgard-api'].environment.PUBLIC_FTPS_HOST, '192.168.1.10');
+  assert.equal(config.services['klipgard-ftps'].environment.FTP_PASV_URL, '192.168.1.10');
+  assert.equal(config.services['init-certs'].environment.FTP_HOST, '192.168.1.10');
+});
+
+test('[ARCH-108] FTP_HOST may stay empty: the camera address is then resolved at start', { skip }, () => {
+  const { ok, error, config } = composeConfig(setValues(filledExample(), { ...ACCOUNT, FTP_HOST: '' }));
+  assert.ok(ok, error);
+  // The API and the other services leave the default to the server config: the host of PUBLIC_URL.
+  for (const name of ['klipgard-api', 'klipgard-mcp', 'klipgard-thumbnail-worker', 'klipgard-scheduler', 'klipgard-push-worker']) {
+    assert.equal(config.services[name].environment.PUBLIC_FTPS_HOST, '', name);
+  }
+  // The FTP server's image entrypoint takes the address that init-certs left in the certs volume.
+  const ftps = config.services['klipgard-ftps'];
+  assert.equal(ftps.environment.FTP_PASV_URL, '');
+  assert.ok(Object.keys(ftps.depends_on).includes('init-certs'));
+  assert.ok(ftps.volumes.some((v) => v.source === 'certs' && v.target === '/certs'), 'the FTP server reads the certs volume');
+  const certs = config.services['init-certs'].environment;
+  assert.equal(certs.FTP_HOST, '');
+  assert.equal(certs.PUBLIC_URL, 'http://192.168.1.10:8080');
 });
 
 test('an empty required setting stops compose with a message that names it', { skip }, () => {

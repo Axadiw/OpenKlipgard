@@ -37,7 +37,9 @@ x-server-env: &server_env
   POSTGRES_PASSWORD: ${DATABASE_PASSWORD:?DATABASE_PASSWORD is not set - copy .env.example to .env and fill it in}
   REDIS_URL: redis://redis:6379
   PUBLIC_APP_URL: ${PUBLIC_URL:?PUBLIC_URL is not set - copy .env.example to .env and fill it in}
-  PUBLIC_FTPS_HOST: ${FTP_HOST:?FTP_HOST is not set - copy .env.example to .env and fill it in}
+  # The address cameras use. Empty: the host of PUBLIC_URL, which init-certs has
+  # checked is an IP address.
+  PUBLIC_FTPS_HOST: ${FTP_HOST:-}
   PUBLIC_FTPS_PORT: ${FTP_PORT:-21}
   JWT_SECRET: ${TOKEN_SECRET:?TOKEN_SECRET is not set - copy .env.example to .env and fill it in}
   KLIPGARD_ENCRYPTION_MASTER_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY is not set - copy .env.example to .env and fill it in}
@@ -154,7 +156,9 @@ services:
     environment:
       # Port inside the container; the port cameras use is FTP_PORT in .env.
       FTP_PORT: "21"
-      FTP_PASV_URL: ${FTP_HOST:?FTP_HOST is not set - copy .env.example to .env and fill it in}
+      # Empty: the image's entrypoint (docker/ftps-entrypoint.sh) uses the address
+      # that init-certs resolved from PUBLIC_URL.
+      FTP_PASV_URL: ${FTP_HOST:-}
       FTP_PASV_MIN: "30000"
       FTP_PASV_MAX: "30099"
       TLS_CERT_PATH: /certs/fullchain.pem
@@ -272,14 +276,19 @@ services:
   # One-shot: private CA + certificates for the bundled object storage and the
   # FTP server, plus the key the services authenticate to each other with.
   # Runs with your own object storage too: the FTP server needs its
-  # certificate either way.
+  # certificate either way. It also works out the address cameras use, and
+  # stops the start with a message when there is none.
   init-certs:
     image: alpine:3.24.2
     environment:
-      FTP_HOST: ${FTP_HOST:?FTP_HOST is not set - copy .env.example to .env and fill it in}
+      # The camera address is FTP_HOST, or the IP address in PUBLIC_URL when
+      # FTP_HOST is empty (docker/ftp-host.sh).
+      FTP_HOST: ${FTP_HOST:-}
+      PUBLIC_URL: ${PUBLIC_URL:?PUBLIC_URL is not set - copy .env.example to .env and fill it in}
     volumes:
       - certs:/certs
       - ./docker/init-certs.sh:/init-certs.sh:ro
+      - ./docker/ftp-host.sh:/ftp-host.sh:ro
     entrypoint: ["/bin/sh", "/init-certs.sh"]
 
   # ── Automatic HTTPS (profile "https") ─────────────────────────────────────
