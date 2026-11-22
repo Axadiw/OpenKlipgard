@@ -1,6 +1,7 @@
 #!/bin/sh
 # First-start certificate setup, run by the `init-certs` service on every
-# `docker compose up`; it only does work while a certificate is missing.
+# `docker compose up`. Certificates are made only while one is missing. The
+# camera address is resolved at every start.
 #
 # Creates a private CA plus two certificates in the `certs` volume, and the
 # key the services authenticate to each other with:
@@ -14,6 +15,14 @@
 #     Nothing stored depends on it. To replace it, delete the file and run
 #     `docker compose down && docker compose up -d`.
 set -e
+
+# The address cameras use to reach this machine: FTP_HOST, or the IPv4 host of
+# PUBLIC_URL when FTP_HOST is empty [ARCH-108]. A start with neither stops here,
+# with the message of docker/ftp-host.sh, before the API or the FTP server
+# starts [ARCH-109]. The FTP server reads the result from the certs volume.
+ftp_host=$(/bin/sh /ftp-host.sh)
+printf '%s\n' "$ftp_host" > /certs/ftp-host
+chmod 644 /certs/ftp-host
 
 if [ ! -f /certs/public.crt ] || [ ! -f /certs/fullchain.pem ] || [ ! -s /certs/internal-api-key ]; then
     # The base image has no openssl tool. It is installed from the image's own
@@ -44,7 +53,7 @@ if [ ! -f /certs/fullchain.pem ]; then
     echo "Generating the FTP server certificate..."
     openssl req -x509 -newkey rsa:2048 \
         -keyout /certs/privkey.pem -out /certs/fullchain.pem \
-        -days 3650 -nodes -subj "/CN=${FTP_HOST:-klipgard}" 2>/dev/null
+        -days 3650 -nodes -subj "/CN=${ftp_host}" 2>/dev/null
 fi
 
 if [ ! -s /certs/internal-api-key ]; then
