@@ -34,6 +34,7 @@ export const edition: FrontendEdition = {
   ProfileTab: null,
   settingsTabs: [],
   LockedBannerAction: null,
+  cameraConnect: null,
   ShellExtras: null,
   i18n: selfhostTranslations,
   init: () => {},

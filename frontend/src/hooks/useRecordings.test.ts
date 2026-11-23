@@ -196,3 +196,129 @@ describe('useRecordings — silent refresh uses the current filters (WEB-GRID-07
     expect(last).toMatchObject({ camera: ['Front'] });
   });
 });
+
+describe('useRecordings — silent refresh of an empty list (WEB-GRID-071)', () => {
+  type Page = { events: object[]; total: number; nextCursor: string | null };
+  const empty: Page = { events: [], total: 0, nextCursor: null };
+
+  /** A getEvents answer that stays open until the test settles it. */
+  function held() {
+    let resolve!: (page: Page) => void;
+    const promise = new Promise<Page>(res => { resolve = res; });
+    return { promise, resolve };
+  }
+
+  /** Mounts the hook on an account with no recordings and runs the first load. */
+  async function mountWithEmptyList(url = '/grid') {
+    const api = await mockedApi();
+    api.getEvents.mockReset();
+    api.getEvents.mockResolvedValue(empty);
+    const loadingSeen: boolean[] = [];
+    const { result } = renderHook(() => {
+      const recordings = useRecordings();
+      loadingSeen.push(recordings.loading);
+      return recordings;
+    }, { wrapper: wrapperWithUrl(url) });
+    act(() => { result.current.loadEvents(); });
+    await waitFor(() => expect(api.getEvents).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    return { api, result, loadingSeen };
+  }
+
+  const refresh = (loadEvents: ReturnType<typeof useRecordings>['loadEvents']) =>
+    loadEvents(undefined, undefined, undefined, false);
+
+  it('does not show loading while it refetches an empty list', async (ctx) => {
+    story(ctx, 'Konto bez nagrań: odświeżenie co 60 s nie przełącza siatki na „Ładowanie…”. Karta „Brak nagrań” zostaje na ekranie, więc nie znika i nie wraca co minutę.');
+    const { api, result, loadingSeen } = await mountWithEmptyList();
+    const seenBefore = loadingSeen.length;
+    const open = held();
+    api.getEvents.mockReturnValueOnce(open.promise);
+
+    await act(async () => { void refresh(result.current.loadEvents); });
+    expect(api.getEvents).toHaveBeenCalledTimes(2);
+    expect(result.current.loading).toBe(false);
+
+    await act(async () => { open.resolve(empty); });
+    expect(result.current.loading).toBe(false);
+    expect(loadingSeen.slice(seenBefore)).not.toContain(true);
+    expect(result.current.events).toEqual([]);
+  });
+
+  it('asks for the first batch, with the filters of the URL and no cursor', async (ctx) => {
+    story(ctx, 'Odświeżenie pustej listy prosi o pierwszą paczkę (50 nagrań, bez kursora) i z filtrami z adresu, tak jak pierwsze ładowanie.');
+    const { api, result } = await mountWithEmptyList('/grid?cameras=Front');
+
+    await act(async () => { await refresh(result.current.loadEvents); });
+
+    const query = api.getEvents.mock.calls[1][0];
+    expect(query).toMatchObject({ limit: 50, camera: ['Front'] });
+    expect(query.cursor).toBeUndefined();
+  });
+
+  it('puts a first recording on the list without a loading step', async (ctx) => {
+    story(ctx, 'Pierwsze nagranie z kamery pojawia się w siatce przy najbliższym odświeżeniu, bez „Ładowania…” w międzyczasie.');
+    const { api, result, loadingSeen } = await mountWithEmptyList();
+    const seenBefore = loadingSeen.length;
+    api.getEvents.mockResolvedValueOnce({ events: [{ id: 'e1', camera: 'Front' }], total: 1, nextCursor: 'c1' });
+
+    await act(async () => { await refresh(result.current.loadEvents); });
+
+    expect(result.current.events.map(e => e.id)).toEqual(['e1']);
+    expect(result.current.total).toBe(1);
+    expect(result.current.hasMore).toBe(true);
+    expect(loadingSeen.slice(seenBefore)).not.toContain(true);
+  });
+
+  it('keeps the list empty and stores the message when the refresh fails', async (ctx) => {
+    story(ctx, 'Gdy odświeżenie pustej listy się nie uda, siatka nie przechodzi w „Ładowanie…”: karta zostaje, a komunikat błędu jest zapamiętany.');
+    const { api, result, loadingSeen } = await mountWithEmptyList();
+    const seenBefore = loadingSeen.length;
+    api.getEvents.mockRejectedValueOnce(new Error('offline'));
+
+    await act(async () => { await refresh(result.current.loadEvents); });
+
+    expect(result.current.error).toBe('offline');
+    expect(result.current.events).toEqual([]);
+    expect(loadingSeen.slice(seenBefore)).not.toContain(true);
+  });
+
+  it('[WEB-GRID-072] discards a refresh that started before a filter change', async (ctx) => {
+    story(ctx, 'Odświeżenie pustej listy, które wystartowało przed zmianą filtra, nie nadpisuje listy nowego filtra, gdy odpowie później.');
+    const { api, result } = await mountWithEmptyList();
+    const stale = held();
+    api.getEvents.mockReturnValueOnce(stale.promise);
+    await act(async () => { void refresh(result.current.loadEvents); });
+
+    api.getEvents.mockResolvedValueOnce({ events: [{ id: 'front-1', camera: 'Front' }], total: 1, nextCursor: null });
+    act(() => { result.current.updateFilters({ cameras: ['Front'] }); });
+    await waitFor(() => expect(result.current.events.map(e => e.id)).toEqual(['front-1']));
+
+    await act(async () => { stale.resolve({ events: [{ id: 'back-1', camera: 'Back' }], total: 1, nextCursor: null }); });
+    expect(result.current.events.map(e => e.id)).toEqual(['front-1']);
+  });
+
+  it('restarts a first load that is still running', async (ctx) => {
+    story(ctx, 'Jeśli pierwsze ładowanie jeszcze trwa (zapytanie wisi), odświeżenie co 60 s zaczyna je od nowa. Zawieszone zapytanie nie blokuje siatki na zawsze, a jego spóźniona odpowiedź jest odrzucona.');
+    const api = await mockedApi();
+    api.getEvents.mockReset();
+    const first = held();
+    const second = held();
+    api.getEvents.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    const { result } = renderHook(() => useRecordings(), { wrapper: wrapperWithUrl('/grid') });
+    act(() => { result.current.loadEvents(); });
+    await waitFor(() => expect(result.current.loading).toBe(true));
+    expect(api.getEvents).toHaveBeenCalledTimes(1);
+
+    await act(async () => { void refresh(result.current.loadEvents); });
+    expect(api.getEvents).toHaveBeenCalledTimes(2);
+    expect(result.current.loading).toBe(true);
+
+    await act(async () => { second.resolve({ events: [{ id: 'new', camera: 'Front' }], total: 1, nextCursor: null }); });
+    expect(result.current.events.map(e => e.id)).toEqual(['new']);
+    expect(result.current.loading).toBe(false);
+
+    await act(async () => { first.resolve({ events: [{ id: 'old', camera: 'Front' }], total: 1, nextCursor: null }); });
+    expect(result.current.events.map(e => e.id)).toEqual(['new']);
+  });
+});

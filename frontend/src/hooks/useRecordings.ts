@@ -289,6 +289,14 @@ export function useRecordings() {
    *       until the user navigates away and back, which is the right
    *       trade — silently reordering a 1500-row scroll position is
    *       worse than slightly stale "newest" content.
+   *
+   *    c) `loadedCount === 0` (an account with no recordings, or filters that
+   *       match none) — refetch the first batch like (a). The empty-state card
+   *       stays on screen. A reset would swap it for "Loading…" and mount it
+   *       again every 60 s, and whatever the card asks the server on mount (the
+   *       Cloud password row does) would repeat each time (WEB-GRID-071).
+   *       Only while the FIRST load is still running does the refresh restart
+   *       it, so a hung first request is retried.
    */
   const loadEvents = useCallback(async (
     _nextPage?: number,
@@ -305,8 +313,9 @@ export function useRecordings() {
     // Silent refresh — refetch the current window without resetting `loading`.
     const filters = filtersRef.current;
     const loadedCount = stateRef.current.events.length;
-    if (loadedCount === 0) {
-      // Nothing loaded yet — fall back to a normal reset.
+    if (loadedCount === 0 && stateRef.current.loading) {
+      // The first load is still running (or hung): restart it. "Loading…" is on
+      // screen already, so nothing flashes.
       setReloadCounter(n => n + 1);
       return;
     }
@@ -327,8 +336,9 @@ export function useRecordings() {
       }
       return;
     }
-    // Branch (a): normal window refresh — same length, replaces array.
-    const refreshLimit = loadedCount;
+    // Branch (a): normal window refresh — same length, replaces array. With
+    // nothing loaded the window is one first batch (branch (c) above).
+    const refreshLimit = loadedCount === 0 ? BATCH_SIZE : loadedCount;
     try {
       const result = await api.getEvents({
         ...filtersToQuery(filters),

@@ -1,5 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import { useAuth } from '../context/AuthContext';
+import { edition } from '../edition';
 import { useServerConfig } from '../hooks/useServerConfig';
 import { useTranslation } from '../i18n';
 import { copyText } from '../utils/clipboard';
@@ -13,9 +15,14 @@ const T = 'events.emptyFirstTime.connect.';
  * account e-mail as the user name, and notes on the password, the encryption
  * and passive mode.
  *
- * Renders nothing until /config has loaded, and on a server with passkeys: an
- * account there can have a separate FTP password, so "your account password"
- * would be wrong.
+ * Renders nothing until /config has loaded, or when the host, the port or the
+ * account e-mail is missing (WEB-GRID-098, WEB-SET-CAMERAS-062).
+ *
+ * Which password a camera needs is a fact about the account, not about the
+ * server: an account with a passkey can have a separate FTP password. The core
+ * cannot tell, so it does not guess. The edition's `cameraConnect` slot gives
+ * the value of the Password row and a footer; without it the row names the
+ * account password.
  */
 export function CameraConnectionDetails() {
   const { t } = useTranslation();
@@ -23,10 +30,11 @@ export function CameraConnectionDetails() {
   const { user } = useAuth();
   const headingId = useId();
 
-  if (!config || config.features.passkeys || !config.ftps.host || !Number.isFinite(config.ftps.port) || !user?.email) {
+  if (!config || !config.ftps.host || !Number.isFinite(config.ftps.port) || !user?.email) {
     return null;
   }
   const { host, port } = config.ftps;
+  const { PasswordValue, Footer } = edition.cameraConnect ?? {};
 
   return (
     <section className="camera-connect" data-testid="camera-connect" aria-labelledby={headingId}>
@@ -35,20 +43,27 @@ export function CameraConnectionDetails() {
         <Row label={t(`${T}server`)} value={host} mono copy />
         <Row label={t(`${T}port`)} value={String(port)} mono copy />
         <Row label={t(`${T}username`)} value={user.email} mono copy />
-        <Row label={t(`${T}password`)} value={t(`${T}passwordValue`)} />
+        <Row label={t(`${T}password`)} value={t(`${T}passwordValue`)}>
+          {PasswordValue && <PasswordValue />}
+        </Row>
         <Row label={t(`${T}encryption`)} value={t(`${T}encryptionValue`)} />
       </dl>
       <p className="camera-connect-hint">{t(`${T}passiveHint`, { host })}</p>
+      {Footer && <Footer />}
     </section>
   );
 }
 
-function Row({ label, value, mono = false, copy = false }: { label: string; value: string; mono?: boolean; copy?: boolean }) {
+/**
+ * One label and one value. When there are `children`, they show in place of
+ * `value`; a Copy button still copies `value`.
+ */
+function Row({ label, value, mono = false, copy = false, children }: { label: string; value: string; mono?: boolean; copy?: boolean; children?: ReactNode }) {
   return (
     <div className="camera-connect-row">
       <dt>{label}</dt>
       <dd>
-        <span className={mono ? 'camera-connect-value camera-connect-mono' : 'camera-connect-value'}>{value}</span>
+        <span className={mono ? 'camera-connect-value camera-connect-mono' : 'camera-connect-value'}>{children ?? value}</span>
         {copy && <CopyButton value={value} label={label} />}
       </dd>
     </div>

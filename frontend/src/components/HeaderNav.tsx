@@ -1,5 +1,7 @@
+import { useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from '../i18n';
+import { useHeaderLabelFit } from '../hooks/useHeaderLabelFit';
 import { track } from '../lib/analytics';
 import { rememberViewMode, viewHref, viewOf, type ViewTarget } from './viewSwitch';
 
@@ -24,6 +26,9 @@ export function HeaderNav() {
   const navigate = useNavigate();
   const { pathname, search } = useLocation();
   const current = viewOf(pathname);
+  // The label of an item shows only while the row has room for it (WEB-SHELL-080).
+  const navRef = useRef<HTMLElement>(null);
+  useHeaderLabelFit(navRef);
 
   const goView = (target: ViewTarget) => (e: React.MouseEvent) => {
     // Let the browser open a new tab on modifier or middle clicks.
@@ -41,13 +46,15 @@ export function HeaderNav() {
   ];
 
   return (
-    <nav className="header-switch" aria-label={t('nav.label')}>
+    <nav ref={navRef} className="header-switch" aria-label={t('nav.label')}>
       {items.map((it) => (
         <a
           key={it.key}
           href={it.href}
           onClick={it.onClick}
           className={`header-switch-item${it.active ? ' active' : ''}`}
+          // A hidden label leaves the icon alone, so the name is kept here.
+          aria-label={it.label}
           aria-current={it.active ? 'page' : undefined}
           data-testid={`nav-${it.key}`}
         >

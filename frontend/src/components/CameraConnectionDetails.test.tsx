@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import type { ComponentType } from 'react';
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import { CameraConnectionDetails } from './CameraConnectionDetails';
 import { story } from '../test-story';
@@ -6,6 +7,7 @@ import { story } from '../test-story';
 const state = vi.hoisted(() => ({
   config: null as null | { features: { passkeys: boolean }; ftps: { host: string; port: number } },
   user: null as null | { email: string },
+  cameraConnect: null as null | { PasswordValue?: ComponentType; Footer?: ComponentType },
 }));
 const copyText = vi.hoisted(() => vi.fn());
 
@@ -20,6 +22,8 @@ vi.mock('../context/AuthContext', () => ({
 vi.mock('../utils/clipboard', () => ({
   copyText: (...a: unknown[]) => copyText(...a),
 }));
+
+vi.mock('../edition', () => ({ edition: { get cameraConnect() { return state.cameraConnect; } } }));
 
 vi.mock('../i18n', () => ({
   registerTranslations: vi.fn(),
@@ -43,6 +47,7 @@ describe('CameraConnectionDetails', () => {
     vi.clearAllMocks();
     state.config = null;
     state.user = null;
+    state.cameraConnect = null;
     copyText.mockResolvedValue(true);
   });
   afterEach(() => {
@@ -124,11 +129,39 @@ describe('CameraConnectionDetails', () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it('renders nothing on a server with passkeys, where the FTP password is not the account password', (ctx) => {
-    story(ctx, 'Gdy serwer obsługuje passkeys, konto może mieć osobne hasło FTP — podpowiedź "hasło konta" byłaby fałszywa, więc blok się nie pokazuje.');
+  it('[WEB-GRID-098] [WEB-SET-CAMERAS-062] shows the block on a server with passkeys, with the default Password row', (ctx) => {
+    story(ctx, 'Blok z danymi do kamery nie zależy już od flagi passkeys — o tym, jakie hasło obowiązuje, decyduje edycja; bez jej głosu blok mówi "hasło konta".');
     selfHosted({ passkeys: true });
-    const { container } = render(<CameraConnectionDetails />);
-    expect(container).toBeEmptyDOMElement();
+    render(<CameraConnectionDetails />);
+    expect(screen.getByTestId('camera-connect')).toBeInTheDocument();
+    expect(screen.getByText(`${P}passwordValue`)).toBeInTheDocument();
+  });
+
+  it('[WEB-GRID-098] shows the Password row of the edition and keeps its label', (ctx) => {
+    story(ctx, 'Edycja może podmienić wartość wiersza "Hasło", a etykieta wiersza zostaje; domyślny tekst znika.');
+    state.cameraConnect = { PasswordValue: () => <span data-testid="edition-password" /> };
+    selfHosted();
+    render(<CameraConnectionDetails />);
+    expect(screen.getByTestId('edition-password')).toBeInTheDocument();
+    expect(screen.getByText(`${P}password`)).toBeInTheDocument();
+    expect(screen.queryByText(`${P}passwordValue`)).not.toBeInTheDocument();
+  });
+
+  it('[WEB-SET-CAMERAS-067] renders the footer of the edition after the passive-mode hint', (ctx) => {
+    story(ctx, 'Linijka od edycji (w Cloudzie: link do przewodnika) pojawia się pod wskazówką o trybie pasywnym, nie nad nią.');
+    state.cameraConnect = { Footer: () => <p data-testid="edition-footer" /> };
+    selfHosted();
+    render(<CameraConnectionDetails />);
+    const hint = screen.getByText(`${P}passiveHint {"host":"192.168.1.10"}`);
+    expect(hint.compareDocumentPosition(screen.getByTestId('edition-footer')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('[WEB-GRID-098] keeps exactly three Copy buttons when the edition replaces the Password row', (ctx) => {
+    story(ctx, 'Podmiana wiersza hasła nie dodaje przycisku Kopiuj — kopiuje się tylko serwer, port i nazwę użytkownika.');
+    state.cameraConnect = { PasswordValue: () => <span>x</span> };
+    selfHosted();
+    render(<CameraConnectionDetails />);
+    expect(screen.getAllByRole('button')).toHaveLength(3);
   });
 
   it('renders nothing without a signed-in user e-mail or with an unusable host or port', (ctx) => {

@@ -16,6 +16,9 @@ vi.mock('../context/AuthContext', () => ({
   useAuth: () => ({ user: state.user }),
 }));
 
+// The connection block asks the edition for its own parts; these tests use none.
+vi.mock('../edition', () => ({ edition: { cameraConnect: null } }));
+
 vi.mock('../i18n', () => ({
   registerTranslations: vi.fn(),
   useTranslation: () => ({
