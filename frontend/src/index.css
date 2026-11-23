@@ -122,8 +122,13 @@ input:-webkit-autofill:active{
 .remember-me input[type="checkbox"]{accent-color:var(--accent);width:16px;height:16px;cursor:pointer}
 /* Default auth-form button = primary CTA. Inline-styled link buttons
    (forgot-password, create-account, etc.) override this with their own
-   inline `style={{ background: 'none', border: 'none' }}`. */
-.auth-form > button{background:var(--accent);border:1px solid var(--accent);border-radius:var(--radius);padding:8px;cursor:pointer;color:var(--on-accent);font-weight:600;margin-top:4px}
+   inline `style={{ background: 'none', border: 'none' }}`. The second selector
+   is for a card whose forms are `display:contents` (VerifyEmailPage), where the
+   button is a grandchild. A button this rule misses is a bare native one: the
+   page's light text on the browser's light fill, so the label is invisible
+   (WEB-AUTH-070). */
+.auth-form > button,
+.auth-form > form > button{background:var(--accent);border:1px solid var(--accent);border-radius:var(--radius);padding:8px;cursor:pointer;color:var(--on-accent);font-weight:600;margin-top:4px}
 /* "OR" separator between the email/password form and the OAuth buttons.
    Lives inside OAuthButtons so it vanishes with them when no provider is
    configured. Centered label with a hairline rule on each side. */
@@ -1168,6 +1173,8 @@ input[type="number"]:focus{border-color:var(--accent)}
 .camera-connect-copy{flex:0 0 auto}
 .camera-connect-status{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 .camera-connect-hint{margin:12px 0 0;font-size:.78rem;line-height:1.45}
+/* A link in the block (an edition adds some) takes the accent: the browser's default blue is 2:1 on the dark card */
+.camera-connect a{color:var(--accent);text-decoration:underline}
 @media (max-width:480px){
   .camera-connect-row{flex-direction:column;align-items:stretch;gap:2px}
   .camera-connect-row dt{flex:none}
@@ -1295,3 +1302,12 @@ html:has(.public-layout) .cookie-banner{
 @media(max-width:380px){
   .header-switch-item:not(.active) span{display:none}
 }
+/* WEB-SHELL-080: HeaderNav measures the row and writes data-labels on the switch.
+   `current` hides the label of the other item, `none` hides both; the icons stay.
+   Fixed widths cannot do this: French and Spanish need about 435px for two labels
+   with the fonts of a Mac and more with others, and the labels grow with the
+   user's text size. The logo does not shrink: the row
+   overflows first, and the measure above then hides a label. */
+.header-switch[data-labels="current"] .header-switch-item:not(.active) span,
+.header-switch[data-labels="none"] .header-switch-item span{display:none}
+.header-brand-logo{flex-shrink:0}

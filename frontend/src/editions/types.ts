@@ -57,6 +57,18 @@ export interface SettingsTabSlot {
   useVisible?: () => boolean;
 }
 
+/**
+ * What an edition adds to the camera connection details of the first-time
+ * empty state. Both parts are optional: the core shows its own Password line
+ * and no footer.
+ */
+export interface CameraConnectSlot {
+  /** The value of the Password row, in place of "your account password". */
+  PasswordValue?: ComponentType;
+  /** Rendered under the passive-mode hint (cloud: a link to the camera guides). */
+  Footer?: ComponentType;
+}
+
 export interface FrontendEdition {
   name: 'selfhost' | 'cloud';
   /** Root-level routes: marketing, legal, help, email flows … */
@@ -106,6 +118,11 @@ export interface FrontendEdition {
   settingsTabs?: SettingsTabSlot[];
   /** Rendered inside the access-locked banner as a call to action. */
   LockedBannerAction?: ComponentType | null;
+  /**
+   * Extra parts of the camera connection details in the first-time empty
+   * state. Absent or null ⇒ the core block alone.
+   */
+  cameraConnect?: CameraConnectSlot | null;
   /** Mounted inside the authed shell next to the player (cloud: account modals). */
   ShellExtras: ComponentType | null;
   /** Extra translations merged over the core catalogs at boot. */

@@ -29,6 +29,9 @@ vi.mock('../hooks/useServerConfig', () => ({
   useServerConfig: () => null,
 }));
 
+// Nor does it get the edition's own parts of that block.
+vi.mock('../edition', () => ({ edition: { cameraConnect: null } }));
+
 beforeEach(() => {
   vi.stubGlobal(
     'IntersectionObserver',

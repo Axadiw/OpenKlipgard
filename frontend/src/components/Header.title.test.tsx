@@ -21,4 +21,9 @@ describe('Header title from another catalog', () => {
     expect(title.textContent).toBe('My cameras');
     expect(container.querySelector('.klipgard-logo')).toBeNull();
   });
+
+  it('[WEB-SHELL-080] lets a title drawn as text shrink: only the logo link keeps its width', () => {
+    const { container } = render(<MemoryRouter><Header /></MemoryRouter>);
+    expect(container.querySelector('a.header-brand')).not.toHaveClass('header-brand-logo');
+  });
 });

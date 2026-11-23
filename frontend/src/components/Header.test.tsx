@@ -132,3 +132,46 @@ describe('Header account menu [WEB-050]', () => {
     expect(button.getAttribute('aria-expanded')).toBe('false');
   });
 });
+
+describe('Header row fit [WEB-SHELL-080]', () => {
+  const tree = () => (
+    <I18nProvider>
+      <MemoryRouter initialEntries={['/grid']}>
+        <Header />
+      </MemoryRouter>
+    </I18nProvider>
+  );
+
+  it('gives the logo link a class that stops it shrinking', (ctx) => {
+    story(ctx, 'Logo w nagłówku nie może być ściskane przez przełącznik widoku: we francuskim i hiszpańskim kurczyło się do zera i wchodziło pod przełącznik.');
+    const { container } = render(tree());
+    expect(container.querySelector('a.header-brand')).toHaveClass('header-brand-logo');
+  });
+
+  it('hides the labels the row cannot hold, and the links keep their names', (ctx) => {
+    story(ctx, 'Gdy wiersz nagłówka jest za wąski na dwa podpisy, przełącznik prosi CSS o ukrycie podpisu drugiej pozycji, a oba linki nadal mają nazwę dla czytnika ekranu.');
+    const { container, rerender } = render(tree());
+    const header = container.querySelector('header.app-header') as HTMLElement;
+    const nav = screen.getByRole('navigation', { name: 'Main' });
+    // What the row needs in each mode, and the 390 px that the phone offers.
+    const need = { both: 435, current: 356, none: 250 };
+    Object.defineProperty(header, 'scrollWidth', { configurable: true, get: () => need[nav.dataset.labels as keyof typeof need] });
+    Object.defineProperty(header, 'clientWidth', { configurable: true, value: 390 });
+
+    rerender(tree());
+
+    expect(nav.dataset.labels).toBe('current');
+    expect(screen.getByRole('link', { name: 'Recordings' })).toBe(screen.getByTestId('nav-grid'));
+    expect(screen.getByRole('link', { name: 'Timeline' })).toBe(screen.getByTestId('nav-timeline'));
+  });
+
+  it('keeps both labels when the row has room', (ctx) => {
+    story(ctx, 'Gdy wiersz nagłówka mieści oba podpisy, nic nie jest ukrywane.');
+    const { container, rerender } = render(tree());
+    const header = container.querySelector('header.app-header') as HTMLElement;
+    Object.defineProperty(header, 'scrollWidth', { configurable: true, value: 390 });
+    Object.defineProperty(header, 'clientWidth', { configurable: true, value: 390 });
+    rerender(tree());
+    expect(screen.getByRole('navigation', { name: 'Main' }).dataset.labels).toBe('both');
+  });
+});

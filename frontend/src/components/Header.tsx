@@ -66,7 +66,8 @@ export function Header({ backendVersion }: Props) {
 
   return (
     <header className="app-header">
-      <a className="header-brand" href={brandHref} onClick={handleBrandClick}>
+      {/* A logo never gives up width (WEB-SHELL-080); a product name drawn as text may shrink. */}
+      <a className={`header-brand${t('header.title') === LOGO_NAME ? ' header-brand-logo' : ''}`} href={brandHref} onClick={handleBrandClick}>
         <h1 className="header-title">
           {t('header.title') === LOGO_NAME ? <KlipgardLogo height={28} /> : t('header.title')}
         </h1>
