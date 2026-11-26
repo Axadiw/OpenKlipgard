@@ -6,6 +6,17 @@ Your cameras upload over FTP, OpenKlipgard stores every recording encrypted,
 and you browse them from a browser or the Klipgard apps — as a grid of clips
 or on a per-camera timeline with instant seeking.
 
+<p>
+  <a href="https://apps.apple.com/us/app/klipgard/id6835241518"><img src="docs/store-badges/app-store.svg" alt="Download on the App Store" height="55"></a>&nbsp;&nbsp;
+  <a href="https://play.google.com/store/apps/details?id=com.klipgard.android"><img src="docs/store-badges/google-play.svg" alt="Get it on Google Play" height="55"></a>&nbsp;&nbsp;
+  <a href="https://apps.microsoft.com/detail/9PHKPB7ZH5MP"><img src="docs/store-badges/microsoft-store.svg" alt="Get it from Microsoft Store" height="55"></a>
+</p>
+
+The Klipgard apps connect to your own server: choose **Own server** on the
+sign-in screen and enter its address. One App Store download covers iPhone,
+iPad, Mac, Apple TV and Apple Watch; Android is on Google Play and Windows on
+the Microsoft Store. More in [Mobile and desktop apps](#mobile-and-desktop-apps).
+
 ![Grid of recordings](screenshot.png)
 ![Timeline view](screenshot-timeline.png)
 
@@ -278,6 +289,9 @@ enter your `PUBLIC_URL`. They hide what a self-hosted server does not offer.
 with the remote: the TV shows a code and `<your address>/tv`; open that
 address on your phone or computer, sign in and enter the code. E-mail and
 password remain available as a fallback.
+
+**Apple Watch** has no sign-in of its own. The watch app comes with the
+iPhone app and uses the server that the iPhone is signed in to.
 
 **Analytics** in the apps are opt-in and off until you agree. If you agree,
 the apps count which screens and features are used on your own server too,
