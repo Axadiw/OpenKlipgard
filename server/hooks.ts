@@ -52,6 +52,13 @@ export interface EditionHooks {
    * tells them nothing new. Null/absent ⇒ the 400 carries no challenge.
    */
   passkeyChallenge?: (userId: number) => Promise<{ sessionId: string; options: unknown } | null>;
+  /**
+   * The account's operator suspended it, so its recordings may be needed by
+   * the authorities (API-CORE-050): automatic deletion never runs for it. The
+   * edition decides what "suspended" means. Absent ⇒ nothing suspends an
+   * account in this edition, and only a lock pauses automatic deletion.
+   */
+  accountSuspended?: (userId: number) => Promise<boolean>;
 }
 
 let installed: EditionHooks = {};

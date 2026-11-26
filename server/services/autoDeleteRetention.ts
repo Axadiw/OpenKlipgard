@@ -13,6 +13,7 @@
 import { getOldestFileOlderThan } from '../db/queries/events.js';
 import { getUsersWithRetention } from '../db/queries/storage.js';
 import { evictFile } from './autoDelete.js';
+import { autoDeletePaused } from './autoDeletePause.js';
 
 /**
  * Hard cap per user per audit run. Looser than the inline near-limit
@@ -41,6 +42,8 @@ export async function runRetentionForUser(
   let freedBytes = 0;
 
   while (deleted < MAX_DELETIONS_PER_USER_PER_RUN) {
+    // API-CORE-118: a lock or a suspension that appears mid-run stops it at the next file.
+    if (await autoDeletePaused(userId)) break;
     const file = await getOldestFileOlderThan(userId, cutoff);
     if (!file) break;
     freedBytes += await evictFile(file, userId, userUuid, 'retention');

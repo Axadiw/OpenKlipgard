@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { story } from '../testing/story.js';
 import type { FileMetaRow } from '../db/queries/events.js';
 
@@ -6,10 +6,18 @@ const {
   mockGetOldestFileOlderThan,
   mockGetUsersWithRetention,
   mockEvictFile,
+  mockIsAccessLocked,
 } = vi.hoisted(() => ({
   mockGetOldestFileOlderThan: vi.fn(),
   mockGetUsersWithRetention: vi.fn(),
   mockEvictFile: vi.fn(),
+  mockIsAccessLocked: vi.fn(),
+}));
+
+// The pause check itself stays real (autoDeletePause.ts + the edition hooks);
+// only its database read is replaced.
+vi.mock('../db/queries/access.js', () => ({
+  isAccessLocked: (...args: unknown[]) => mockIsAccessLocked(...args),
 }));
 
 vi.mock('../db/queries/events.js', () => ({
@@ -24,6 +32,7 @@ vi.mock('./autoDelete.js', () => ({
   evictFile: (...args: unknown[]) => mockEvictFile(...args),
 }));
 
+import { installEditionHooks } from '../hooks.js';
 import { runRetentionForUser, runRetentionForAllUsers } from './autoDeleteRetention.js';
 
 const USER_ID = 7;
@@ -49,7 +58,10 @@ describe('autoDeleteRetention', () => {
     mockEvictFile.mockResolvedValue(0);
     mockGetOldestFileOlderThan.mockResolvedValue(null);
     mockGetUsersWithRetention.mockResolvedValue([]);
+    mockIsAccessLocked.mockResolvedValue(false);
+    installEditionHooks(undefined);
   });
+  afterEach(() => installEditionHooks(undefined));
 
   describe('runRetentionForUser', () => {
     it('walks files older than the cutoff until none remain', async (ctx) => {
@@ -136,6 +148,63 @@ describe('autoDeleteRetention', () => {
 
       expect(r.usersProcessed).toBe(2);
       expect(r.totalDeleted).toBe(0); // user 1 errored, user 2 had no eligible files
+    });
+  });
+
+  describe('automatic deletion pause [API-CORE-050, API-CORE-118]', () => {
+    it('API-CORE-118: deletes nothing for a locked account', async (ctx) => {
+      story(ctx, 'Konto zablokowane (bez planu albo blokada admina) ma ustawioną retencję, ale pętla nie rusza żadnego pliku. Blokada chroni nagrania, które mogą być potrzebne organom.');
+      mockIsAccessLocked.mockResolvedValue(true);
+      mockGetOldestFileOlderThan.mockResolvedValue(makeFile('2026-01-01T00:00:00Z'));
+
+      const r = await runRetentionForUser(USER_ID, USER_UUID, SALT, 7);
+
+      expect(r).toEqual({ deleted: 0, freedBytes: 0 });
+      expect(mockEvictFile).not.toHaveBeenCalled();
+    });
+
+    it('API-CORE-118: stops before the next file when the account becomes locked during the run', async (ctx) => {
+      story(ctx, 'Admin zawiesza konto w trakcie przebiegu: pętla sprawdza blokadę przed każdym plikiem, więc przepada najwyżej jeden plik, a nie kolejne 499.');
+      mockIsAccessLocked.mockResolvedValueOnce(false).mockResolvedValue(true);
+      mockGetOldestFileOlderThan.mockResolvedValue(makeFile('2026-01-01T00:00:00Z'));
+      mockEvictFile.mockResolvedValue(1_000_000);
+
+      const r = await runRetentionForUser(USER_ID, USER_UUID, SALT, 7);
+
+      expect(r).toEqual({ deleted: 1, freedBytes: 1_000_000 });
+    });
+
+    it('API-CORE-050 [Cloud]: deletes nothing for an unlocked account the edition calls suspended', async (ctx) => {
+      story(ctx, 'Konto z banem ręcznym nie ma blokady dostępu, ale edycja zgłasza je jako zawieszone przez hook: retencja je omija. Hook dostaje id właściwego konta, nie innego.');
+      installEditionHooks({ accountSuspended: async (id) => id === USER_ID });
+      mockGetOldestFileOlderThan.mockResolvedValue(makeFile('2026-01-01T00:00:00Z'));
+
+      const r = await runRetentionForUser(USER_ID, USER_UUID, SALT, 7);
+
+      expect(r).toEqual({ deleted: 0, freedBytes: 0 });
+      expect(mockEvictFile).not.toHaveBeenCalled();
+    });
+
+    it('API-CORE-118: deletes nothing when the check fails', async (ctx) => {
+      story(ctx, 'Awaria bazy przy sprawdzaniu blokady nie może oznaczać "nie zablokowane": przebieg kończy się błędem i niczego nie kasuje.');
+      mockIsAccessLocked.mockRejectedValue(new Error('db down'));
+      mockGetOldestFileOlderThan.mockResolvedValue(makeFile('2026-01-01T00:00:00Z'));
+
+      await expect(runRetentionForUser(USER_ID, USER_UUID, SALT, 7)).rejects.toThrow('db down');
+      expect(mockEvictFile).not.toHaveBeenCalled();
+    });
+
+    it('API-CORE-050: the pass skips a locked account and goes on with the others', async (ctx) => {
+      story(ctx, 'Przebieg retencji idzie po wszystkich kontach z oknem: zablokowane omija, następne dalej obsługuje. Jedno zawieszone konto nie zatrzymuje reszty.');
+      mockGetUsersWithRetention.mockResolvedValueOnce([
+        { id: 1, uuid: 'u1', encryptionSalt: 's1', autoDeleteAfterDays: 7 },
+        { id: 2, uuid: 'u2', encryptionSalt: 's2', autoDeleteAfterDays: 7 },
+      ]);
+      mockIsAccessLocked.mockImplementation(async (id: number) => id === 1);
+
+      await runRetentionForAllUsers();
+
+      expect(mockGetOldestFileOlderThan.mock.calls.map((c) => c[0])).toEqual([2]);
     });
   });
 });
