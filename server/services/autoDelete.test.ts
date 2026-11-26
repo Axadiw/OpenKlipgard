@@ -64,6 +64,13 @@ vi.mock('../config.js', () => ({
   },
 }));
 
+// The pause check itself stays real (autoDeletePause.ts + the edition hooks);
+// only its database read is replaced.
+const { mockIsAccessLocked } = vi.hoisted(() => ({ mockIsAccessLocked: vi.fn() }));
+vi.mock('../db/queries/access.js', () => ({
+  isAccessLocked: (...args: unknown[]) => mockIsAccessLocked(...args),
+}));
+
 import { autoDeleteOldestUntilFreed, evictFile, deleteUserVideoObject } from './autoDelete.js';
 
 const USER_ID = 42;
@@ -115,6 +122,7 @@ describe('autoDelete — file-FIFO + cascade', () => {
     mockDeleteEventAndThumbnail.mockResolvedValue(undefined);
     mockFindEventsReferencingS3Key.mockResolvedValue([]);
     mockGetOldestFileForUser.mockResolvedValue(null);
+    mockIsAccessLocked.mockResolvedValue(false);
   });
 
   describe('evictFile cascade', () => {
@@ -244,6 +252,17 @@ describe('autoDelete — file-FIFO + cascade', () => {
 
       expect(result).toEqual({ deleted: 0, freedBytes: 0, enabled: false });
       expect(mockGetOldestFileForUser).not.toHaveBeenCalled();
+    });
+
+    it('API-CORE-118: deletes nothing for a locked account even when delete oldest is on', async (ctx) => {
+      story(ctx, 'Zablokowane konto z włączonym "usuń najstarsze gdy pełne": pętla FIFO nie rusza S3 ani bazy. Blokada ma pierwszeństwo przed ustawieniem użytkownika.');
+      mockIsAccessLocked.mockResolvedValue(true);
+      mockGetOldestFileForUser.mockResolvedValueOnce(makeFile()).mockResolvedValue(null);
+
+      const result = await autoDeleteOldestUntilFreed(USER_ID, USER_UUID, 'salt', 1024);
+
+      expect(result).toEqual({ deleted: 0, freedBytes: 0, enabled: true });
+      expect(mockDeleteObject).not.toHaveBeenCalled();
     });
 
     it('walks oldest-first until the target is met', async (ctx) => {

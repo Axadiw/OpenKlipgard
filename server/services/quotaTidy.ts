@@ -22,6 +22,7 @@ import {
 } from '../db/queries/storage.js';
 import { getOldestFileForUser } from '../db/queries/events.js';
 import { evictFile } from './autoDelete.js';
+import { autoDeletePaused } from './autoDeletePause.js';
 import { reconcileUserQuota } from './quota-reconciler.js';
 
 export interface TidyResult {
@@ -66,6 +67,8 @@ export async function evictUserToFitPlan(
     const planLimit = quota.diskLimitBytes;
 
     while (true) {
+      // API-CORE-118: a lock or a suspension that appears mid-run stops it at the next file.
+      if (await autoDeletePaused(userId)) break;
       const usage = await getDiskUsage(userId);
       if (usage <= planLimit) break;
 

@@ -29,6 +29,7 @@ import type { CameraEvent } from '../types.js';
 import { deleteObject } from './s3.js';
 import { deleteEventAndThumbnail } from './eventCleanup.js';
 import { deleteS3AndMetadata, deleteSidecarsForRecording } from './fileLifecycle.js';
+import { autoDeletePaused } from './autoDeletePause.js';
 import { CONFIG } from '../config.js';
 
 export interface DeleteVideoTarget {
@@ -186,6 +187,8 @@ export async function autoDeleteOldestUntilFreed(
   let freedBytes = 0;
 
   while (freedBytes < targetBytes) {
+    // API-CORE-118: a lock or a suspension that appears mid-run stops it at the next file.
+    if (await autoDeletePaused(userId)) break;
     const file = await getOldestFileForUser(userId);
     if (!file) break;            // library empty — natural termination
     freedBytes += await evictFile(file, userId, userUuid, 'quota');
